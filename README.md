@@ -1,8 +1,7 @@
 # Speak the Spirit 🕊️
 ### Natively Integrating Scripture into Emerging Frontiers
 
-[Insert a 2-3 sentence description here. Explain what problem you are solving and how your application changes what's possible for someone encountering Scripture in a space they already love.]
-
+Experience Scripture in action to restore muted Songbeasts, learning and memorizing verses to equip your daily walk with the Spirit.
 ---
 
 ## 🚀 Features & Core Capabilities
