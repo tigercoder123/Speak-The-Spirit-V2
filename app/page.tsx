@@ -8,7 +8,8 @@ import ConsoleLog from '../components/ConsoleLog';
 import IntroDialogue from '../components/IntroDialogue';
 import OverworldMap from '../components/OverworldMap';
 import QuestRiddle from '../components/QuestRiddle';
-import BattleArea from '../components/BattleArea';
+import ChestReturnScene from '../components/ChestReturnScene';
+import SilencerBattleScene from '../components/SilencerBattleScene';
 import Debrief from '../components/Debrief';
 import BasecampShop from '../components/BasecampShop';
 import OnboardingFlow from '../components/OnboardingFlow';
@@ -16,12 +17,11 @@ import { supabase } from '../services/supabaseService';
 import BackgroundMusic from '../components/BackgroundMusic';
 
 function GameContent() {
-  const { 
-    currentScreen, 
-    isLoggedIn, 
+  const {
+    currentScreen,
+    isLoggedIn,
     userId,
-    portalActive, 
-    isTransactionPending 
+    isTransactionPending
   } = useGame();
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
 
@@ -76,29 +76,13 @@ function GameContent() {
     </div>
   );
 
-  const renderPortal = () => (
-    <div className="absolute inset-0 bg-black/90 z-50 flex flex-col items-center justify-center p-8 text-center">
-      <div className="absolute inset-0 bg-radial-gradient from-violet-600/30 via-transparent to-transparent animate-radial-pulse"></div>
-      <div className="w-48 h-48 rounded-full border-8 border-dashed border-cyan-400 animate-spin-slow flex items-center justify-center relative">
-        <div className="w-32 h-32 rounded-full border-8 border-dotted border-pink-500 animate-spin flex items-center justify-center">
-          <span className="text-6xl animate-ping">✨</span>
-        </div>
-      </div>
-      <h2 className="text-3xl font-black mt-8 text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-pink-400 to-yellow-300 animate-pulse tracking-widest uppercase">
-        RESTORING FREQUENCIES
-      </h2>
-      <p className="text-yellow-400 font-semibold mt-3 animate-bounce">
-        {"\"For God so loved the world...\" soundwaves are breaking the silent curse!"}
-      </p>
-    </div>
-  );
-
   const renderScreen = () => {
     switch (currentScreen) {
       case 'INTRO': return <IntroDialogue />;
       case 'OVERWORLD': return <OverworldMap />;
       case 'QUEST': return <QuestRiddle />;
-      case 'BATTLE': return <BattleArea />;
+      case 'CHEST_RETURN': return <ChestReturnScene />;
+      case 'BATTLE': return <SilencerBattleScene />;
       case 'DEBRIEF': return <Debrief />;
       case 'SHOP': return <BasecampShop />;
       default: return <IntroDialogue />;
@@ -113,7 +97,6 @@ function GameContent() {
       <GameHeader />
       <main className="flex-1 w-full p-6 overflow-y-auto bg-slate-800 rounded-none neo-box relative overflow-hidden">
         {isTransactionPending && renderLoadingScreen()}
-        {portalActive && renderPortal()}
         {renderScreen()}
       </main>
       <ConsoleLog />

@@ -1,4 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect } from 'react';
+import { usePlayerWalker } from '../../../hooks/usePlayerWalker';
+import DirectionalPad from '../../DirectionalPad';
 
 interface CrossroadsMapProps {
   stageState: string;
@@ -9,6 +11,10 @@ interface CrossroadsMapProps {
   onClickChest: () => void;
 }
 
+const PLAYER_SPEED = 9;
+const MAP_BOUNDS = { minX: 0, maxX: 800, minY: 0, maxY: 600 };
+const PATH_TOLERANCE = 45;
+
 export default function CrossroadsMap({
   stageState,
   characterPath,
@@ -17,12 +23,6 @@ export default function CrossroadsMap({
   onReturnToFork,
   onClickChest
 }: CrossroadsMapProps) {
-  // 🎮 Internal Map State
-  const [playerPos, setPlayerPos] = useState({ x: 368, y: 550 });
-  const playerSpeed = 10;
-  // Put this near your other state variables at the top of the component
-  const [facing, setFacing] = useState<'left' | 'right'>('right');
-
   // 🗺️ WAYPOINTS FOR BOTH MAPS
   const forkWaypoints = [
     // Your exact traced waypoints for the crossroads!
@@ -49,6 +49,18 @@ export default function CrossroadsMap({
     { x: 400, y: 550 }, { x: 400, y: 600 }
   ];
 
+  const isWalkableStage = stageState === 'fork' || stageState === 'x-marks' || stageState === 'ghosts';
+  const currentWaypoints =
+    stageState === 'x-marks' ? xMarksWaypoints : stageState === 'ghosts' ? ghostWaypoints : forkWaypoints;
+
+  const { position: playerPos, facing, setPosition: setPlayerPos, startMove, stopMove } = usePlayerWalker({
+    initialPosition: { x: 368, y: 550 },
+    speed: PLAYER_SPEED,
+    bounds: MAP_BOUNDS,
+    path: { waypoints: currentWaypoints, tolerance: PATH_TOLERANCE },
+    enabled: isWalkableStage,
+  });
+
   // 🎯 Move player to specific entrances when changing maps
   useEffect(() => {
     if (stageState === 'x-marks') {
@@ -56,36 +68,7 @@ export default function CrossroadsMap({
     } else if (stageState === 'ghosts') {
       setPlayerPos({ x: 400, y: 200 }); // Spawn high up in the ghost path
     }
-  }, [stageState]);
-
-  // 📐 COLLISION MATH
-  const isPositionOnPath = (x: number, y: number): boolean => {
-    const pathTolerance = 45; 
-    let currentWaypoints = forkWaypoints;
-    if (stageState === 'x-marks') currentWaypoints = xMarksWaypoints;
-    if (stageState === 'ghosts') currentWaypoints = ghostWaypoints;
-
-    for (const pt of currentWaypoints) {
-      const distance = Math.sqrt(Math.pow(x - pt.x, 2) + Math.pow(y - pt.y, 2));
-      if (distance <= pathTolerance) return true;
-    }
-    return false;
-  };
-
-  const attemptPhysicalMove = (dx: number, dy: number) => {
-    setPlayerPos((prev) => {
-      const targetX = prev.x + dx;
-      const targetY = prev.y + dy;
-      if (dx < 0) setFacing('left');
-      if (dx > 0) setFacing('right');
-      if (targetX < 0 || targetX > 800 || targetY < 0 || targetY > 600) return prev;
-
-      if (isPositionOnPath(targetX, targetY)) {
-        return { x: targetX, y: targetY };
-      }
-      return prev;
-    });
-  };
+  }, [stageState, setPlayerPos]);
 
   // 🚨 EVENT TRIGGERS (Watched safely here)
   useEffect(() => {
@@ -99,7 +82,7 @@ export default function CrossroadsMap({
       const musicNoteX = 560;
       const musicNoteY = 320;
       const distanceToNote = Math.sqrt(Math.pow(playerPos.x - musicNoteX, 2) + Math.pow(playerPos.y - musicNoteY, 2));
-      
+
       if (distanceToNote <= 50) {
         onClickChest();
       }
@@ -110,33 +93,7 @@ export default function CrossroadsMap({
         onReturnToFork();
       }
     }
-  }, [playerPos, stageState, onHitGhost, onHitXMarks, onClickChest, onReturnToFork]);
-
-  // ⌨️ KEYBOARD LISTENERS
-  useEffect(() => {
-    // Active for all three playable maps!
-    if (stageState !== 'fork' && stageState !== 'x-marks' && stageState !== 'ghosts') return;
-
-    const handleKeyDown = (e: any) => {
-      const activeEl = document.activeElement;
-      if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) return; 
-
-      switch (e.key) {
-        case 'ArrowUp': case 'w': case 'W':
-          e.preventDefault(); attemptPhysicalMove(0, -playerSpeed); break;
-        case 'ArrowDown': case 's': case 'S':
-          e.preventDefault(); attemptPhysicalMove(0, playerSpeed); break;
-        case 'ArrowLeft': case 'a': case 'A':
-          e.preventDefault(); attemptPhysicalMove(-playerSpeed, 0); break;
-        case 'ArrowRight': case 'd': case 'D':
-          e.preventDefault(); attemptPhysicalMove(playerSpeed, 0); break;
-        default: break;
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [stageState]);
+  }, [playerPos, stageState, onHitGhost, onHitXMarks, onClickChest, onReturnToFork, setPlayerPos]);
 
   // Determine which background to show dynamically
   const currentBackground = 
@@ -172,15 +129,7 @@ export default function CrossroadsMap({
             />
           </div>
 
-          {/* D-PAD CONTROLS */}
-          <div className="absolute bottom-4 right-4 flex flex-col items-center gap-1 bg-slate-950 p-3 rounded-full border-4 border-black shadow-[0_4px_0_#000] z-30 opacity-80 hover:opacity-100 transition-opacity">
-            <button onClick={() => attemptPhysicalMove(0, -playerSpeed)} className="w-12 h-12 bg-slate-100 text-black text-xl font-black border-2 border-black rounded hover:bg-white active:translate-y-1">↑</button>
-            <div className="flex gap-1">
-              <button onClick={() => attemptPhysicalMove(-playerSpeed, 0)} className="w-12 h-12 bg-slate-100 text-black text-xl font-black border-2 border-black rounded hover:bg-white active:translate-y-1">←</button>
-              <button onClick={() => attemptPhysicalMove(0, playerSpeed)} className="w-12 h-12 bg-slate-100 text-black text-xl font-black border-2 border-black rounded hover:bg-white active:translate-y-1">↓</button>
-              <button onClick={() => attemptPhysicalMove(playerSpeed, 0)} className="w-12 h-12 bg-slate-100 text-black text-xl font-black border-2 border-black rounded hover:bg-white active:translate-y-1">→</button>
-            </div>
-          </div>
+          <DirectionalPad onStartMove={startMove} onStopMove={stopMove} />
         </div>
       )}
 

@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 // 1. NEW: Import the GameContext hook
 import { useGame } from '../../../context/GameContext';
+import { usePlayerWalker } from '../../../hooks/usePlayerWalker';
+import DirectionalPad from '../../DirectionalPad';
 
 interface RushingWatersStageProps {
   stageState: string;
@@ -11,6 +13,11 @@ interface RushingWatersStageProps {
   onOpenChest: () => void;
 }
 
+const PLAYER_SPEED = 13.5;
+// No path/waypoints here - free movement clamped to this rectangle, unlike
+// the Crossroads/Hunger maps which require staying near a traced path.
+const MAP_BOUNDS = { minX: 0, maxX: 750, minY: 0, maxY: 550 };
+
 export default function RushingWatersStage({
   stageState,
   characterPath,
@@ -19,89 +26,57 @@ export default function RushingWatersStage({
   onFoundClef,
   onOpenChest
 }: RushingWatersStageProps) {
-  
+
   // 2. NEW: Grab verseChunks from the context
   const { verseChunks } = useGame();
 
-  // 🚶‍♂️ 2D WALKING STATE
-  const [playerPos, setPlayerPos] = useState({ x: 50, y: 300 });
   const [bridgeRevealed, setBridgeRevealed] = useState(false);
   const [sinkMessage, setSinkMessage] = useState("");
-  const playerSpeed = 15;
-  // Put this near your other state variables at the top of the component
-  const [facing, setFacing] = useState<'left' | 'right'>('right');
+
+  const isWalkableStage =
+    stageState === 'river-crossing' || stageState === 'find-clef' || stageState === 'chest-scene';
+
+  const { position: playerPos, facing, setPosition: setPlayerPos, startMove, stopMove } = usePlayerWalker({
+    initialPosition: { x: 50, y: 300 },
+    speed: PLAYER_SPEED,
+    bounds: MAP_BOUNDS,
+    enabled: isWalkableStage,
+  });
 
   // 🌍 SPAWN POINTS
   useEffect(() => {
     if (stageState === 'find-clef') {
       // Spawn at the left side of the path for the treble clef map
-      setPlayerPos({ x: 50, y: 360 }); 
+      setPlayerPos({ x: 50, y: 360 });
     }
-  }, [stageState]);
-
-  const attemptMove = (dx: number, dy: number) => {
-    setPlayerPos((prev) => {
-      let targetX = prev.x + dx;
-      let targetY = prev.y + dy;
-      // 👈 ADD THESE TWO LINES HERE
-      if (dx < 0) setFacing('left');
-      if (dx > 0) setFacing('right');
-      // Screen Boundaries
-      if (targetX < 0) targetX = 0;
-      if (targetX > 750) targetX = 750;
-      if (targetY < 0) targetY = 0;
-      if (targetY > 550) targetY = 550;
-
-      // 🌊 River Bridge Logic
-      if (stageState === 'river-crossing') {
-        if (targetX > 200 && targetX < 600) {
-          if (!bridgeRevealed) setBridgeRevealed(true);
-        }
-      }
-
-      return { x: targetX, y: targetY };
-    });
-  };
-
-  // ⌨️ KEYBOARD LISTENERS
-  useEffect(() => {
-    if (stageState !== 'river-crossing' && stageState !== 'find-clef' && stageState !== 'chest-scene') return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Prevent scrolling
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
-      
-      switch (e.key) {
-        case 'ArrowUp': case 'w': case 'W': attemptMove(0, -playerSpeed); break;
-        case 'ArrowDown': case 's': case 'S': attemptMove(0, playerSpeed); break;
-        case 'ArrowLeft': case 'a': case 'A': attemptMove(-playerSpeed, 0); break;
-        case 'ArrowRight': case 'd': case 'D': attemptMove(playerSpeed, 0); break;
-        default: break;
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [stageState, bridgeRevealed]);
+  }, [stageState, setPlayerPos]);
 
   // 🚨 EVENT TRIGGERS (River & Clef)
   useEffect(() => {
+    // 🌊 River Bridge Logic - was inline in the move callback; watching the
+    // committed position here is equivalent (a move only ever commits a
+    // clamped position, so this fires on the exact same values it used to).
+    if (stageState === 'river-crossing' && playerPos.x > 200 && playerPos.x < 600 && !bridgeRevealed) {
+      setBridgeRevealed(true);
+    }
+
     // 1. Cross the river
     if (stageState === 'river-crossing' && playerPos.x >= 700) {
       onCrossedRiver();
     }
-    
+
     // 2. Find the Treble Clef
     if (stageState === 'find-clef') {
       const clefX = 433;
       const clefY = 354;
       const distanceToClef = Math.sqrt(Math.pow(playerPos.x - clefX, 2) + Math.pow(playerPos.y - clefY, 2));
-      
+
       // Hitbox tolerance of 50px
       if (distanceToClef <= 120) {
         onFoundClef();
       }
     }
-  }, [playerPos, stageState, onCrossedRiver, onFoundClef]);
+  }, [playerPos, stageState, onCrossedRiver, onFoundClef, bridgeRevealed]);
 
   // 🎒 DRAG AND DROP TRAP LOGIC
   const handleDragStart = (e: React.DragEvent, itemName: string) => {
@@ -196,14 +171,7 @@ export default function RushingWatersStage({
             </div>
 
             {/* On-Screen D-Pad */}
-            <div className="absolute bottom-4 right-4 flex flex-col items-center gap-1 bg-slate-950 p-3 rounded-full border-4 border-black shadow-[0_4px_0_#000] z-30 opacity-80 hover:opacity-100 transition-opacity">
-               <button onClick={() => attemptMove(0, -playerSpeed)} className="w-12 h-12 bg-slate-100 text-black text-xl font-black border-2 border-black rounded hover:bg-white active:translate-y-1">↑</button>
-               <div className="flex gap-1">
-                 <button onClick={() => attemptMove(-playerSpeed, 0)} className="w-12 h-12 bg-slate-100 text-black text-xl font-black border-2 border-black rounded hover:bg-white active:translate-y-1">←</button>
-                 <button onClick={() => attemptMove(0, playerSpeed)} className="w-12 h-12 bg-slate-100 text-black text-xl font-black border-2 border-black rounded hover:bg-white active:translate-y-1">↓</button>
-                 <button onClick={() => attemptMove(playerSpeed, 0)} className="w-12 h-12 bg-slate-100 text-black text-xl font-black border-2 border-black rounded hover:bg-white active:translate-y-1">→</button>
-               </div>
-            </div>
+            <DirectionalPad onStartMove={startMove} onStopMove={stopMove} />
           </div>
 
           {/* BOTTOM INVENTORY BAR (Only shows during river crossing) */}

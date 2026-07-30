@@ -5,7 +5,7 @@ export interface ShopItem {
   cost: number;
   icon: string;
   costLabel: string;
-  stateKey: 'hasSwordOfTruth' | 'hasHolyWater' | null;
+  stateKey: 'hasHolyWater' | null;
 }
 
 export const SHOP_ITEMS: ShopItem[] = [
@@ -17,15 +17,6 @@ export const SHOP_ITEMS: ShopItem[] = [
     icon: '🎟️',
     costLabel: 'Cupcakes 🧁',
     stateKey: null,
-  },
-  {
-    id: 'SWORD',
-    name: 'Sword of Truth',
-    description: 'Shatters Silencer barriers instantly.',
-    cost: 8,
-    icon: '⚔️',
-    costLabel: 'Cupcakes 🧁',
-    stateKey: 'hasSwordOfTruth',
   },
   {
     id: 'WATER',

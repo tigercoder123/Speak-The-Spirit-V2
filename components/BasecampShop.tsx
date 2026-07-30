@@ -10,10 +10,9 @@ export default function BasecampShop() {
   const { 
     cupcakes, 
     setCupcakes,
-    cucumbers, 
-    setCucumbers, 
-    hasSwordOfTruth, 
-    hasHolyWater, 
+    cucumbers,
+    setCucumbers,
+    hasHolyWater,
     setCurrentScreen, 
     setFeedback, 
     triggerShake 
@@ -46,7 +45,6 @@ export default function BasecampShop() {
 
   const isItemOwned = (item: ShopItem) => {
     if (!item.stateKey) return false;
-    if (item.stateKey === 'hasSwordOfTruth') return hasSwordOfTruth;
     if (item.stateKey === 'hasHolyWater') return hasHolyWater;
     return false;
   };

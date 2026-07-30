@@ -4,9 +4,9 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { addLog as emitGameLog } from '../utils/gameEvents';
 import { supabase, supabaseService } from '../services/supabaseService';
-import { BATTLE_ROUNDS } from '../utils/battleData';
+import type { Position } from '../hooks/usePlayerWalker';
 
-export type Screen = 'INTRO' | 'OVERWORLD' | 'QUEST' | 'BATTLE' | 'DEBRIEF' | 'SHOP';
+export type Screen = 'INTRO' | 'OVERWORLD' | 'QUEST' | 'BATTLE' | 'CHEST_RETURN' | 'DEBRIEF' | 'SHOP';
 
 export interface LogEntry {
   text: string;
@@ -34,18 +34,18 @@ interface GameContextType {
   characterPath: string;
   displayName: string | null;
   gradeLevel: string | null;
+  /** The player's chosen YouVersion Bible translation ID, set during onboarding - null until loaded/if unset. */
+  bibleVersionId: number | null;
+  setBibleVersionId: (id: number) => void;
+  /** The player's chosen verse language code (e.g. 'en', 'es') - null until loaded/if unset. */
+  bibleLanguage: string | null;
+  setBibleLanguage: (language: string) => void;
 
   // Game Logic State
   introStep: number;
   setIntroStep: (step: number) => void;
   questObjectClicked: boolean;
   setQuestObjectClicked: (clicked: boolean) => void;
-  battleStep: number;
-  setBattleStep: (step: number) => void;
-  battleShieldHp: number;
-  setBattleShieldHp: (hp: number) => void;
-  portalActive: boolean;
-  setPortalActive: (active: boolean) => void;
   isSongbeastRehomed: boolean;
   setIsSongbeastRehomed: (rehomed: boolean) => void;
 
@@ -56,8 +56,6 @@ interface GameContextType {
   setCucumbers: (val: number | ((prev: number) => number)) => void;
   tickets: number;
   setTickets: (val: number | ((prev: number) => number)) => void;
-  hasSwordOfTruth: boolean;
-  setHasSwordOfTruth: (val: boolean) => void;
   hasHolyWater: boolean;
   setHasHolyWater: (val: boolean) => void;
 
@@ -78,16 +76,28 @@ interface GameContextType {
   // Actions
   triggerShake: () => void;
   handleResetGame: () => void;
-  handleBattleAnswer: (answer: string) => void;
-  handleUseSwordOfTruth: () => void;
-  handleTriggerPortal: () => void;
 
   isMuted: boolean;
   setIsMuted: (val: boolean) => void;
-  
+
   // 🎵 NEW: Track management
   currentTrack: string;
   setCurrentTrack: (trackPath: string) => void;
+
+  /** One-shot spawn override for the Silencer battle's EXPLORING view - set
+   * when a transition (e.g. ChestReturnScene's left-edge hand-off) needs the
+   * player to land somewhere other than EXPLORATION_PLAYER_SPAWN. Consumed
+   * and cleared by hooks/useSilencerBattle.ts on mount; null means "use the
+   * default spawn". */
+  pendingBattleSpawn: Position | null;
+  setPendingBattleSpawn: (position: Position | null) => void;
+
+  /** Dev cheat (see GameHeader.tsx's "Cheat: Restored" button) - one-shot flag
+   * telling the Silencer battle to skip straight to the RESTORED phase
+   * (Songbeast already fully restored) instead of the normal EXPLORING/
+   * challenge flow. Consumed and cleared by hooks/useSilencerBattle.ts on mount. */
+  pendingBattleSkipToRestored: boolean;
+  setPendingBattleSkipToRestored: (value: boolean) => void;
 }
 
 
@@ -98,7 +108,14 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const searchParams = useSearchParams();
 
   // Navigation & Authentication
-  const [currentScreen, setCurrentScreenState] = useState<Screen>('INTRO');
+  // Restores the screen from the URL on load (setCurrentScreen already pushes
+  // `?screen=...`, so a reload/direct link should land back on the same
+  // screen instead of always resetting to INTRO).
+  const [currentScreen, setCurrentScreenState] = useState<Screen>(() => {
+    const fromUrl = searchParams.get('screen');
+    const validScreens: Screen[] = ['INTRO', 'OVERWORLD', 'QUEST', 'BATTLE', 'CHEST_RETURN', 'DEBRIEF', 'SHOP'];
+    return (validScreens as string[]).includes(fromUrl ?? '') ? (fromUrl as Screen) : 'INTRO';
+  });
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [loginMethod, setLoginMethod] = useState<LoginMethod>(null);
@@ -107,9 +124,6 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   // Gameplay Progress
   const [introStep, setIntroStep] = useState<number>(0);
   const [questObjectClicked, setQuestObjectClicked] = useState<boolean>(false);
-  const [battleStep, setBattleStep] = useState<number>(0);
-  const [battleShieldHp, setBattleShieldHp] = useState<number>(100);
-  const [portalActive, setPortalActive] = useState<boolean>(false);
   const [isSongbeastRehomed, setIsSongbeastRehomed] = useState<boolean>(false);
 
   // Currencies & Inventory
@@ -128,7 +142,6 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const [cupcakes, setCupcakesState] = useState<number>(() => getSavedReward('cupcakes') ?? 0);
   const [cucumbers, setCucumbersState] = useState<number>(() => getSavedReward('cucumbers') ?? 0);
   const [tickets, setTicketsState] = useState<number>(() => getSavedReward('tickets') ?? 0);
-  const [hasSwordOfTruth, setHasSwordOfTruth] = useState<boolean>(false);
   const [hasHolyWater, setHasHolyWater] = useState<boolean>(false);
 
   // Progression
@@ -138,9 +151,13 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState<string | null>(null); // 👈 NEW
   const [gradeLevel, setGradeLevel] = useState<string | null>(null);
+  const [bibleVersionId, setBibleVersionIdState] = useState<number | null>(null);
+  const [bibleLanguage, setBibleLanguageState] = useState<string | null>(null);
 
   const [isMuted, setIsMuted] = useState(true);
   const[currentTrack,setCurrentTrack]= useState ('/audio/crossroads.mp3');
+  const [pendingBattleSpawn, setPendingBattleSpawn] = useState<Position | null>(null);
+  const [pendingBattleSkipToRestored, setPendingBattleSkipToRestored] = useState<boolean>(false);
 
   // 👤 NEW: Derived character path for your 2D sprites!
   // Defaults to girlnobackground if NULL or not set to boy
@@ -168,33 +185,33 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     }));
   };
 
-  // Internal helper to reset state without triggering another signOut
+  // Internal helper to reset state without triggering another signOut.
+  // Unconditional (not gated on currentScreen) and excludes currentScreen from
+  // its own deps below - depending on it would give this callback a new
+  // identity on every screen change, which would re-run the auth-listener
+  // effect further down (it lists this callback in its deps) and re-subscribe
+  // to Supabase - and onAuthStateChange re-fires immediately on every new
+  // subscription, so a logged-out session would call this again right as any
+  // screen change committed, snapping currentScreen straight back to INTRO.
   const cleanupAuthAndState = React.useCallback(() => {
     setIsLoggedIn(false);
     setUserId(null);
     setLoginMethod(null);
-    
-    if (currentScreen !== 'INTRO') {
-      setCurrentScreen('INTRO');
-    }
+    setCurrentScreen('INTRO');
 
     // Fully clear out game state
     setIntroStep(0);
     setQuestObjectClicked(false);
-    setBattleStep(0);
-    setBattleShieldHp(100);
-    setPortalActive(false);
     setIsSongbeastRehomed(false);
     setCupcakesState(0);
     setCucumbersState(0);
     setTicketsState(0);
     setClearedIslands([]);
-    setHasSwordOfTruth(false);
     setHasHolyWater(false);
     setFeedback('');
 
     emitGameLog("Player session ended. Game state cleared.", "system");
-  }, [currentScreen, setCurrentScreen]);
+  }, [setCurrentScreen]);
 
   const loadOfflineFallback = () => {
     const savedRewards = localStorage.getItem('sts_rewards');
@@ -228,6 +245,8 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         setAvatarUrl(profile.avatar_url || null);
         setDisplayName (profile.display_name || 'Traveler'); //new
         setGradeLevel(profile.grade_level || null);
+        setBibleVersionIdState(profile.bible_version_id || null);
+        setBibleLanguageState(profile.language || null);
 
         const loadedIslands = profile.clearedIslands || [];
         setClearedIslands(loadedIslands);
@@ -248,6 +267,8 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     cucumbers?: number;
     tickets?: number;
     clearedIslands?: string[];
+    bible_version_id?: number;
+    language?: string;
   }) => {
     try {
       await supabaseService.saveProfile(id, updatedFields);
@@ -340,50 +361,24 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     emitGameLog(`Cleared island progression updated: ${islandName}!`, "system");
   };
 
+  // Settings: verse translation/language - changing either re-triggers every
+  // spot that reads bibleVersionId (QuestRiddle's verse-chunk fetch, the
+  // Silencer battle's own verse fetch), so freshly-collected/battled verse
+  // text reflects the new choice without needing a full reload.
+  const setBibleVersionId = (id: number) => {
+    setBibleVersionIdState(id);
+    if (userId) saveProfile(userId, { bible_version_id: id });
+  };
+
+  const setBibleLanguage = (language: string) => {
+    setBibleLanguageState(language);
+    if (userId) saveProfile(userId, { language });
+  };
+
   // Visual shaker helper
   const triggerShake = () => {
     setShakeTrigger(true);
     setTimeout(() => setShakeTrigger(false), 500);
-  };
-
-  // --- BATTLE LOGIC ---
-  const handleBattleAnswer = (answer: string) => {
-    const currentRound = BATTLE_ROUNDS[battleStep];
-    if (answer === currentRound.correct) {
-      emitGameLog(`Correct! Selected "${answer}". The Silencer's shield takes damage!`, "battle");
-      const nextHp = Math.max(0, battleShieldHp - 33);
-      setBattleShieldHp(nextHp);
-      if (battleStep < BATTLE_ROUNDS.length - 1) {
-        setBattleStep(battleStep + 1);
-        setFeedback("Holy frequencies matching! Keep decoding!");
-      } else {
-        setBattleShieldHp(0);
-        setFeedback("Shield fully neutralized! The Songbeast is ready to be restored!");
-        emitGameLog("The Silencer's noise shield is down! Trigger the restoration portal!", "system");
-      }
-    } else {
-      triggerShake();
-      setFeedback("Static interference! That word didn't match the vibration of Truth.");
-      emitGameLog(`Incorrect answer "${answer}". The Silencer's shield deflected the strike.`, "battle");
-    }
-  };
-
-  const handleUseSwordOfTruth = () => {
-    if (!hasSwordOfTruth) return;
-    emitGameLog("You raise the Sword of Truth! Pure radiant light pierces the static barrier!", "battle");
-    setBattleShieldHp(0);
-    setBattleStep(BATTLE_ROUNDS.length - 1);
-    setFeedback("The Sword of Truth instantly shattered the Silencer's barrier!");
-  };
-
-  const handleTriggerPortal = () => {
-    setPortalActive(true);
-    emitGameLog("Activating Born Again Portal... Restoring frequencies!", "system");
-    setTimeout(() => {
-      setPortalActive(false);
-      setCurrentScreen('DEBRIEF');
-      emitGameLog("Songbeast Barnaby restored successfully! Entering debrief phase.", "songbeast");
-    }, 2500);
   };
 
   // Authentication Functions
@@ -402,11 +397,8 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setCurrentScreen('INTRO');
     setIntroStep(0);
     setQuestObjectClicked(false);
-    setBattleStep(0);
-    setBattleShieldHp(100);
-    setPortalActive(false);
     setIsSongbeastRehomed(false);
-    
+
     const resetCupcakes = 5;
     const resetCucumbers = 5;
     const resetTickets = 1;
@@ -414,8 +406,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setCucumbersState(resetCucumbers);
     setTicketsState(resetTickets);
     setClearedIslands([]);
-    
-    setHasSwordOfTruth(false);
+
     setHasHolyWater(false);
     setFeedback('');
     emitGameLog("Game values reset to start. Starting over...", "system");
@@ -450,12 +441,6 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         setIntroStep,
         questObjectClicked,
         setQuestObjectClicked,
-        battleStep,
-        setBattleStep,
-        battleShieldHp,
-        setBattleShieldHp,
-        portalActive,
-        setPortalActive,
         isSongbeastRehomed,
         setIsSongbeastRehomed,
 
@@ -465,8 +450,6 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         setCucumbers,
         tickets,
         setTickets,
-        hasSwordOfTruth,
-        setHasSwordOfTruth,
         hasHolyWater,
         setHasHolyWater,
 
@@ -484,18 +467,23 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
 
         triggerShake,
         handleResetGame,
-        handleBattleAnswer,
-        handleUseSwordOfTruth,
-        handleTriggerPortal,
 
         avatarUrl,      // 👈 NEW
         characterPath,  // 👈 NEW
         displayName,
         gradeLevel,
+        bibleVersionId,
+        setBibleVersionId,
+        bibleLanguage,
+        setBibleLanguage,
         isMuted,
         setIsMuted,
         currentTrack,
         setCurrentTrack,
+        pendingBattleSpawn,
+        setPendingBattleSpawn,
+        pendingBattleSkipToRestored,
+        setPendingBattleSkipToRestored,
       }}
     >
       {children}
