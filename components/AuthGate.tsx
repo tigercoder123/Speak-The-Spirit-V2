@@ -5,7 +5,7 @@ import { useGame } from '../context/GameContext';
 import { supabase } from '../services/supabaseService';
 
 export default function AuthGate() {
-  const { shakeTrigger, triggerShake } = useGame();
+  const { shakeTrigger, triggerShake, startDemo } = useGame();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isSignUp, setIsSignUp] = useState(false);
@@ -123,8 +123,22 @@ export default function AuthGate() {
         </div>
       </form>
 
+      <div className="mt-6 flex items-center gap-3">
+        <span className="h-[2px] flex-1 bg-slate-700"></span>
+        <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Or</span>
+        <span className="h-[2px] flex-1 bg-slate-700"></span>
+      </div>
+
+      <button
+        type="button"
+        onClick={startDemo}
+        className="w-full mt-6 bg-yellow-400 hover:brightness-110 text-black font-black text-sm uppercase py-4 rounded-lg border-2 border-black neo-btn transition-all"
+      >
+        🎬 Watch the Demo
+      </button>
+
       <div className="mt-6 text-center">
-        <button 
+        <button
           onClick={() => setIsSignUp(!isSignUp)}
           className="text-xs font-bold text-cyan-400 hover:text-cyan-300 underline underline-offset-4 transition-colors"
         >
