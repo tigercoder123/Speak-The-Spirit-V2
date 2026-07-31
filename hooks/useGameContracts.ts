@@ -2,9 +2,10 @@
 
 import { useGame } from '../context/GameContext';
 import { addLog } from '../utils/gameEvents';
+import { isPowerUpType } from '../config/powerUpConfig';
 
 export function useGameContracts() {
-  const { setCupcakes, setHasHolyWater, setTickets } = useGame();
+  const { setCupcakes, setHasHolyWater, setPowerUps } = useGame();
 
   const rescueSongbeastOnChain = async (beastId: string, decryptionProof: string): Promise<{ success: boolean, txHash?: string, error?: Error | string }> => {
     addLog(`Initiating rescue process for beast ${beastId}...`, "system");
@@ -26,7 +27,7 @@ export function useGameContracts() {
       setTimeout(() => {
         addLog(`Purchase Confirmed: Spent ${costInCupcakes} Cupcakes.`, "shop");
         if (itemId === 'WATER') setHasHolyWater(true);
-        if (itemId === 'TICKET') setTickets(prev => prev + 1);
+        if (isPowerUpType(itemId)) setPowerUps(prev => ({ ...prev, [itemId]: prev[itemId] + 1 }));
         addLog(`Received ${itemId} in inventory!`, "system");
         resolve({ success: true });
       }, 1000);

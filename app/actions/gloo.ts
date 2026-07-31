@@ -449,16 +449,26 @@ export async function verifyComprehension(
 /**
  * 🗣️ Generates 3 tone-varied response lines for the Silencer battle's CHOICE
  * screen - one each for gentle/firm/warm, all carrying the same "you don't
- * need the Silencer's gear" message, grounded in a biblical theme, and
- * specific to whichever gear piece is being removed this round. Also
- * generates the muted Songbeast's own short thought-bubble reaction to each
- * of the 3 lines in this same call, so the matching reaction is already in
- * hand the instant the player picks one (see components/battle/ThoughtBubble.tsx
- * and services/responseChoicesService.ts) - no second Gloo call, no wait.
+ * need the Silencer's gear" message, grounded specifically in the verse the
+ * player is currently memorizing, and specific to whichever gear piece is
+ * being removed this round. Also generates, in this SAME call:
+ * 1. The muted Songbeast's own short thought-bubble reaction to each of the
+ *    3 lines, so the matching reaction is already in hand the instant the
+ *    player picks one (see components/battle/ThoughtBubble.tsx).
+ * 2. The Silencer's own tone-keyed comeback line reacting to that exact
+ *    line, used as the RESILENCE beat's temptation line once the player's
+ *    tone is known (see components/battle/TemptationLine.tsx and
+ *    hooks/useSilencerBattle.ts's selectResponse) - so the Silencer's
+ *    re-silence taunt always answers what the player actually just said,
+ *    instead of an independent, unrelated line from a second Gloo call.
+ * All in services/responseChoicesService.ts - no second Gloo call, no wait.
  */
 export async function generateSilencerResponseChoices(
   gearPieceName: string,
-  gearPieceDescription: string
+  gearPieceDescription: string,
+  gearPieceLie: string,
+  verseReference: string,
+  verseText: string
 ) {
   try {
     const accessToken = await getGlooAccessToken();
@@ -469,19 +479,31 @@ export async function generateSilencerResponseChoices(
     const systemPrompt = `
       You are a biblically-grounded creative writer for a children's Bible game called "Speak the Spirit".
 
+      In this game, God is called "the Gardener" - always use "the Gardener" instead of "God", "Lord",
+      "Jesus", or any other name/title for God, in every line you write below.
+
       In this game, a Songbeast has been silenced by an antagonist called the Silencer, who has fitted it
       with oppressive gear, and cannot speak. The player just answered a Bible memory challenge correctly
       and is about to remove one piece of that gear: the ${gearPieceName} (${gearPieceDescription}).
 
+      The Songbeast isn't wearing the ${gearPieceName} just because it looks nice - it's still wearing it
+      because the Silencer convinced it of this specific lie:
+      "${gearPieceLie}"
+
+      The verse the player is memorizing this battle is ${verseReference}: "${verseText}"
+
       Write exactly 3 short lines of dialogue the player could say to the Songbeast as they remove this
       piece. Every line must:
-      1. Carry the same core message: the Songbeast doesn't need what the Silencer gave it.
-      2. Specifically reference the ${gearPieceName} being removed.
-      3. Be grounded in a real, appropriate biblical theme or truth, paraphrased simply for children -
-         not necessarily quoting a specific verse, but recognizably biblical.
+      1. Directly speak into and dismantle the SPECIFIC lie above - not a generic "you don't need the
+         gear" message. Each line should make clear why that exact lie isn't true.
+      2. Use the verse above as the reason the lie isn't true - paraphrase or echo its actual words,
+         phrases, or ideas (not just a generic biblical theme) to show specifically how it counters the
+         lie. A child should be able to tell this line came from THIS verse specifically.
+      3. Specifically reference the ${gearPieceName} being removed.
       4. Be one short sentence, simple and age-appropriate.
 
-      The 3 lines differ only in delivery tone:
+      The 3 lines differ in delivery tone AND in which part of the lie/verse connection they lean on, so
+      they don't just restate the same point 3 times:
       - "gentle": gentle and encouraging
       - "firm": firm and bold
       - "warm": warm and affirming
@@ -494,13 +516,24 @@ export async function generateSilencerResponseChoices(
          are fine.
       3. Be EXTREMELY short: 3 to 6 words maximum. This is a hard requirement.
 
+      For EACH of the 3 lines, ALSO write the Silencer's own one-line comeback, spoken moments later as it
+      puts a piece of gear back onto the Songbeast, directly rebutting THAT EXACT line the player just
+      said. Each comeback must:
+      1. Directly reference or twist something specific the player's matching line just said - not a
+         generic taunt, a rebuttal to those exact words.
+      2. Try to pull the Songbeast back toward believing the lie above again (e.g. casting doubt on what
+         the player just said, or claiming it's not enough) - never anything violent, scary, or genuinely
+         frightening for a child.
+      3. Be one short sentence.
+      4. Not include quotation marks around the line itself - those are added separately.
+
       Respond with a strict, valid JSON object and nothing else. No markdown, no code blocks, just raw JSON.
 
       Expected JSON format:
       {
-        "gentle": { "line": "the gentle, encouraging line", "reaction": "Songbeast's short thought reacting to it" },
-        "firm": { "line": "the firm, bold line", "reaction": "Songbeast's short thought reacting to it" },
-        "warm": { "line": "the warm, affirming line", "reaction": "Songbeast's short thought reacting to it" }
+        "gentle": { "line": "the gentle, encouraging line", "reaction": "Songbeast's short thought reacting to it", "rebuttal": "the Silencer's comeback to this exact line" },
+        "firm": { "line": "the firm, bold line", "reaction": "Songbeast's short thought reacting to it", "rebuttal": "the Silencer's comeback to this exact line" },
+        "warm": { "line": "the warm, affirming line", "reaction": "Songbeast's short thought reacting to it", "rebuttal": "the Silencer's comeback to this exact line" }
       }
     `;
 
@@ -515,14 +548,14 @@ export async function generateSilencerResponseChoices(
         auto_routing: true,
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: `Generate the 3 response lines and matching Songbeast reactions for the ${gearPieceName} now.` }
+          { role: "user", content: `Generate the 3 response lines, matching Songbeast reactions, and matching Silencer comebacks for the ${gearPieceName} now.` }
         ],
         temperature: 0.8,
-        // The whole JSON payload is 6 short fields (3 one-sentence lines, 3
-        // three-to-six-word reactions) - comfortably under 500 tokens even
-        // generously. Caps worst-case generation time if the model rambles,
-        // without any risk of truncating a well-formed response.
-        max_tokens: 500
+        // The whole JSON payload is 9 short fields (3 one-sentence lines, 3
+        // three-to-six-word reactions, 3 one-sentence comebacks) - comfortably
+        // under 700 tokens even generously. Caps worst-case generation time if
+        // the model rambles, without any risk of truncating a well-formed response.
+        max_tokens: 700
       }),
       signal: AbortSignal.timeout(12000)
     });
@@ -547,6 +580,9 @@ export async function generateSilencerResponseChoices(
     if (!parsed.gentle?.reaction || !parsed.firm?.reaction || !parsed.warm?.reaction) {
       throw new Error("Gloo response is missing one or more tones' reactions.");
     }
+    if (!parsed.gentle?.rebuttal || !parsed.firm?.rebuttal || !parsed.warm?.rebuttal) {
+      throw new Error("Gloo response is missing one or more tones' rebuttals.");
+    }
 
     return {
       lines: {
@@ -558,6 +594,11 @@ export async function generateSilencerResponseChoices(
         gentle: String(parsed.gentle.reaction),
         firm: String(parsed.firm.reaction),
         warm: String(parsed.warm.reaction),
+      },
+      rebuttals: {
+        gentle: String(parsed.gentle.rebuttal),
+        firm: String(parsed.firm.rebuttal),
+        warm: String(parsed.warm.rebuttal),
       },
     };
   } catch (error: unknown) {
@@ -583,6 +624,9 @@ export async function generateSongbeastResilenceThought(temptationLineContent: s
 
     const systemPrompt = `
       You are a biblically-grounded creative writer for a children's Bible game called "Speak the Spirit".
+
+      In this game, God is called "the Gardener" - always use "the Gardener" instead of "God", "Lord",
+      "Jesus", or any other name/title for God, if you reference God at all below.
 
       In this game, a Songbeast has been silenced by an antagonist called the Silencer and cannot speak.
       The Silencer just said this to the Songbeast, while putting a piece of its gear back on:
@@ -649,88 +693,6 @@ export async function generateSongbeastResilenceThought(temptationLineContent: s
 }
 
 /**
- * 🥷 Generates the Silencer's temptation line for the RESILENCE beat - spoken
- * as it puts one piece of gear back onto the Songbeast, trying to lure it
- * back into wearing it.
- */
-export async function generateSilencerTemptationLine(
-  gearPieceName: string,
-  gearPieceDescription: string
-) {
-  try {
-    const accessToken = await getGlooAccessToken();
-    if (!accessToken) {
-      throw new Error("Could not acquire Gloo access token.");
-    }
-
-    const systemPrompt = `
-      You are a biblically-grounded creative writer for a children's Bible game called "Speak the Spirit".
-
-      In this game, an antagonist called the Silencer is trying to re-silence a Songbeast that a player
-      just partially freed, by putting one piece of oppressive gear back onto it: the ${gearPieceName}
-      (${gearPieceDescription}).
-
-      Write exactly ONE short line of dialogue the Silencer says to the Songbeast as it puts this piece
-      of gear back on, trying to tempt or discourage the Songbeast into accepting it again. The line must:
-      1. Specifically reference the ${gearPieceName} being put back on.
-      2. Read as a subtle lie or discouragement (e.g. "it's easier this way", "you're not ready to be
-         heard/seen/free yet") - never anything violent, scary, or genuinely frightening for a child.
-      3. Be one short sentence.
-      4. Not include quotation marks around the line itself - those are added separately.
-
-      Respond with a strict, valid JSON object and nothing else. No markdown, no code blocks, just raw JSON.
-
-      Expected JSON format:
-      {
-        "line": "the Silencer's temptation line, without quotation marks"
-      }
-    `;
-
-    const url = "https://platform.ai.gloo.com/ai/v2/chat/completions";
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        "Authorization": `Bearer ${accessToken}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        auto_routing: true,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: `Generate the Silencer's temptation line for the ${gearPieceName} now.` }
-        ],
-        temperature: 0.8
-      }),
-      signal: AbortSignal.timeout(12000)
-    });
-
-    if (!response.ok) {
-      throw new Error(`Gloo completion call responded with ${response.status}`);
-    }
-
-    const data = await response.json();
-    const rawText = data.choices[0].message.content.trim();
-
-    const startIndex = rawText.indexOf('{');
-    const endIndex = rawText.lastIndexOf('}');
-    if (startIndex === -1 || endIndex === -1) {
-      throw new Error("No JSON object found in response.");
-    }
-    const parsed = JSON.parse(rawText.substring(startIndex, endIndex + 1));
-
-    if (!parsed.line) {
-      throw new Error("Gloo response is missing the line.");
-    }
-
-    return { line: String(parsed.line) };
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error('Error in generateSilencerTemptationLine:', message);
-    return { error: message };
-  }
-}
-
-/**
  * 😈 Generates the Silencer's gloating line for a WRONG-answer moment - said
  * as it puts a piece of gear back onto the Songbeast because the player just
  * missed a Bible memory question - together with the muted Songbeast's own
@@ -751,6 +713,9 @@ export async function generateSilencerWrongAnswerMoment(
 
     const systemPrompt = `
       You are a biblically-grounded creative writer for a children's Bible game called "Speak the Spirit".
+
+      In this game, God is called "the Gardener" - always use "the Gardener" instead of "God", "Lord",
+      "Jesus", or any other name/title for God, if you reference God at all below.
 
       In this game, a Songbeast has been silenced by an antagonist called the Silencer and cannot speak.
       The player just answered a Bible memory challenge WRONG, and the Silencer capitalizes on the

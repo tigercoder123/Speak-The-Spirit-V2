@@ -33,7 +33,7 @@ export default function BattleExplorationView({
   onConfirmRestore,
 }: BattleExplorationViewProps) {
   return (
-    <div className="relative mx-auto flex h-[520px] w-full max-w-4xl flex-col overflow-hidden rounded-xl bg-gradient-to-b from-emerald-950 to-slate-900 text-white">
+    <div className="relative mx-auto flex h-[520px] w-full max-w-4xl flex-col overflow-hidden rounded-xl bg-gradient-to-b from-green-950 to-slate-900 text-white">
       <div className="relative flex-1">
         <img
           src={BATTLE_ASSETS.backgrounds.zoomedOut}

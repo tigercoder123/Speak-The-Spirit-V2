@@ -15,7 +15,7 @@ export default function DebriefContinueButton({ onContinue }: DebriefContinueBut
     <div className="absolute inset-x-0 bottom-6 z-20 flex justify-center">
       <button
         onClick={onContinue}
-        className="neo-btn bg-green-500 hover:bg-green-400 text-white font-black uppercase text-sm px-8 py-3 rounded-xl"
+        className="neo-btn bg-green-400 hover:bg-green-300 text-white font-black uppercase text-sm px-8 py-3 rounded-xl"
       >
         Continue
       </button>

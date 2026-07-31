@@ -162,6 +162,15 @@ interface SongbeastBattleAvatarProps {
   /** Whether this upcoming correct turn ends the battle (golden flash, sprite
    * swap, Silencer gone for good) instead of the Silencer's usual comeback. */
   isFinalTurn: boolean;
+  /** Hush Silencer power-up - when true, the upcoming correct turn's re-
+   * silence beat (arm swing, dark wave, taunt line) never plays at all;
+   * playerTurn calls onReSilenceBlocked instead of setback() once the gear-
+   * removal cascade finishes. */
+  skipReSilence: boolean;
+  /** Fires instead of the setback()/onReSilenceEffectStart chain when
+   * skipReSilence blocked this turn's re-silence - see useSilencerBattle.ts's
+   * handleReSilenceBlocked. */
+  onReSilenceBlocked: () => void;
   /** Dev cheat (see GameHeader.tsx's "Cheat: Restored" button) - mounts
    * already in the fully-restored pose (restored sprites, Silencer gone,
    * majestic idle breathing) instead of playing the idle/gear-on state and
@@ -194,6 +203,8 @@ export default function SongbeastBattleAvatar({
   onReSilenceEffectStart,
   onFinalRestorationComplete,
   isFinalTurn,
+  skipReSilence,
+  onReSilenceBlocked,
   startRestored = false,
   restorePercent,
   restoreBarVisible,
@@ -208,6 +219,7 @@ export default function SongbeastBattleAvatar({
     setPhase(next);
   };
   const isFinalTurnRef = useRef(isFinalTurn);
+  const skipReSilenceRef = useRef(skipReSilence);
   const gearPiecesRef = useRef(gearPieces);
 
   // The last-committed (currently at-rest) gear status - only updated at the
@@ -222,9 +234,10 @@ export default function SongbeastBattleAvatar({
   // several renders earlier - always read the truly-current value.
   useEffect(() => {
     isFinalTurnRef.current = isFinalTurn;
+    skipReSilenceRef.current = skipReSilence;
     gearPiecesRef.current = gearPieces;
     gearStatusRef.current = gearStatus;
-  }, [isFinalTurn, gearPieces, gearStatus]);
+  }, [isFinalTurn, skipReSilence, gearPieces, gearStatus]);
 
   // Player
   const playerRef = useRef<HTMLImageElement>(null);
@@ -512,6 +525,15 @@ export default function SongbeastBattleAvatar({
         onGearRemoved();
         if (isFinal) {
           finalRestoration();
+        } else if (skipReSilenceRef.current) {
+          // Hush Silencer - the re-silence beat (arm swing, dark wave, taunt
+          // line) never plays at all, since handleGearRemoved already left
+          // gear untouched for this turn. setback() itself is what normally
+          // resumes idleTweens (in its own onComplete) and reports
+          // onSilencerTurnComplete, so both need doing here instead.
+          idleTweens.current.forEach((t) => t.resume());
+          setPhaseBoth('idle');
+          onReSilenceBlocked();
         } else {
           gsap.delayedCall(0.35, () => setback());
         }
@@ -557,7 +579,7 @@ export default function SongbeastBattleAvatar({
 
         tl.to(
           [torsoGroupRef.current, headContainerRef.current],
-          { rotation: -5, y: 10, duration: 0.5, ease: 'sine.inOut', transformOrigin: '50% 100%' },
+          { rotation: -4, y: 10, duration: 0.5, ease: 'sine.inOut', transformOrigin: '50% 100%' },
           'restore+=1.6'
         );
 
@@ -679,14 +701,30 @@ export default function SongbeastBattleAvatar({
     });
   });
 
+  // Every real battle-turn/re-silence/golden-flash tween along the way
+  // (idle breathing, the whip cascade, the Speak Lies restore, the golden
+  // flash's own head tilt) leaves torsoGroupRef/headContainerRef/playerRef
+  // sitting at whatever value they were mid-tween when paused/killed or
+  // never tweened back - the "Cheat: Restored" mount-time path never touches
+  // any of that history, so it always starts this loop from a clean
+  // baseline. Snapping every property this function actually animates back
+  // to that same neutral baseline first - unconditionally, regardless of
+  // which path called this - is what makes the two look identical instead
+  // of the real path's leftover offsets (and, worse, an interpolated
+  // transformOrigin sliding from the golden flash's '50% 100%' to this
+  // loop's '0% 50%') reading as the head detaching from the body.
   // eslint-disable-next-line react-hooks/refs
   const startMajesticIdle = contextSafe(() => {
     idleTweens.current.forEach((t) => t.kill());
     idleTweens.current = [];
 
+    gsap.set(torsoGroupRef.current, { scaleY: 1, scaleX: 1 });
+    gsap.set(headContainerRef.current, { rotation: 0, y: 0, transformOrigin: '0% 50%' });
+    gsap.set(playerRef.current, { y: 0, scaleY: 1 });
+
     idleTweens.current.push(
       gsap.to(torsoGroupRef.current, {
-        scaleY: 1.03,
+        scaleY: 1.02,
         duration: 2.2,
         ease: 'sine.inOut',
         yoyo: true,
@@ -696,13 +734,13 @@ export default function SongbeastBattleAvatar({
     );
     idleTweens.current.push(
       gsap.to(headContainerRef.current, {
-        rotation: -1,
+        rotation: -1.5,
         y: -1,
-        duration: 2.6,
+        duration: 2.2,
         ease: 'sine.inOut',
         yoyo: true,
         repeat: -1,
-        transformOrigin: '50% 50%',
+        transformOrigin: '0% 50%',
       })
     );
     idleTweens.current.push(
@@ -717,7 +755,7 @@ export default function SongbeastBattleAvatar({
   });
 
   return (
-    <div className="relative mx-auto flex h-[520px] w-full max-w-4xl flex-col overflow-hidden rounded-xl bg-gradient-to-b from-emerald-950 to-slate-900 text-white">
+    <div className="relative mx-auto flex h-[520px] w-full max-w-4xl flex-col overflow-hidden rounded-xl bg-gradient-to-b from-green-950 to-slate-900 text-white">
       <div className="relative flex-1">
         <img
           src={BATTLE_ASSETS.backgrounds.zoomedIn}

@@ -15,7 +15,7 @@ export default function RestoreBar({ percent }: RestoreBarProps) {
   return (
     <div className="w-full bg-slate-950 h-5 border-2 border-black rounded-lg overflow-hidden flex items-center justify-center relative">
       <div
-        className="absolute left-0 top-0 bottom-0 bg-emerald-400 transition-all duration-700 ease-out"
+        className="absolute left-0 top-0 bottom-0 bg-green-400 transition-all duration-700 ease-out"
         style={{ width: `${percent}%` }}
       />
       <span className="z-10 text-[10px] font-black text-white mix-blend-difference">RESTORATION: {percent}%</span>

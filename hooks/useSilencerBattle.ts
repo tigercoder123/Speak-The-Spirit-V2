@@ -5,19 +5,20 @@ import { useGame } from '../context/GameContext';
 import { addLog } from '../utils/gameEvents';
 import { getVerse } from '../services/scriptureService';
 import { getFreshResponseChoices } from '../services/responseChoicesService';
-import { getFreshTemptationLine } from '../services/temptationLineService';
 import { getFreshResilenceThought } from '../services/resilenceThoughtService';
 import { getFreshWrongAnswerMoment } from '../services/wrongAnswerMomentService';
 import { getFreshDistractors } from '../services/distractorService';
 import { LANGUAGE_NAMES } from '../services/bibleVersionsService';
 import {
   Challenge,
+  ChallengeSegment,
   ChallengeType,
   checkAnswers,
   DistractorLookup,
   generateChallenge,
   tokenizeVerseWords,
 } from '../utils/challengeGenerator';
+import type { PowerUpType } from '../config/powerUpConfig';
 import { usePlayerWalker } from './usePlayerWalker';
 import type { Position } from './usePlayerWalker';
 import { useSongbeastDebriefDialogue } from './useSongbeastDebriefDialogue';
@@ -36,7 +37,6 @@ import {
   ExtraRoundCounts,
   GEAR_PIECE_INFO,
   GEAR_PIECE_ORDER,
-  GearPieceKey,
   NO_EXTRA_ROUNDS,
   ResponseOption,
   ResponseTone,
@@ -48,6 +48,7 @@ import {
   SILENCER_BATTLE_VERSE_REFERENCE,
   SILENCER_BATTLE_WRONG_ANSWER_LINES,
   SILENCER_BATTLE_WRONG_ANSWER_THOUGHTS,
+  SilencerBattleRoundConfig,
   TOTAL_TURNS_FOR_PERFECT_RUN,
   WrongAnswerMoment,
 } from '../config/silencerBattleRounds';
@@ -89,7 +90,10 @@ export type ThoughtBubbleBeat = 'CHOICE' | 'RESILENCE' | 'WRONG_ANSWER';
 //     clicks Continue)--> DIALOGUE (darkened dialogue over the still-visible
 //     frozen battle scene - gratitude + cucumber gift + the send-off choice,
 //     sequenced by hooks/useSongbeastDebriefDialogue.ts) --(final line
-//     dismissed)--> COMPLETE
+//     dismissed)--> MISSION_COMPLETE (a "Mission Complete!" banner + a green
+//     Continue button in the corner - does NOT auto-advance; see
+//     components/battle/MissionCompleteButton.tsx) --(player clicks
+//     Continue)--> COMPLETE
 export type BattlePhase =
   | 'EXPLORING'
   | 'INTRO'
@@ -104,6 +108,7 @@ export type BattlePhase =
   | 'RESTORED'
   | 'DEBRIEF_PROMPT'
   | 'DIALOGUE'
+  | 'MISSION_COMPLETE'
   | 'COMPLETE';
 
 export type GearPieceState = 'ON' | 'HALF_ON' | 'REMOVED';
@@ -201,6 +206,8 @@ export function useSilencerBattle() {
     setPendingBattleSpawn,
     pendingBattleSkipToRestored,
     setPendingBattleSkipToRestored,
+    powerUps,
+    setPowerUps,
   } = useGame();
 
   // Dev cheat (GameHeader.tsx's "Cheat: Restored" button) - captured once on
@@ -254,6 +261,35 @@ export function useSilencerBattle() {
   const [totalWrongAnswers, setTotalWrongAnswers] = useState(0);
   const missedChallengeTypeRef = useRef<ChallengeType | null>(null);
 
+  // Battle-scoped power-up state - never persisted (see config/powerUpConfig.ts
+  // for the purchased-inventory side, which lives in GameContext instead).
+  // Wiped on every startBattle() and again when the battle ends (RESTORED) -
+  // see those two spots below. Shield/Hush Silencer linger across challenges
+  // within a battle until consumed; Hint/Check/Free Pass never linger here.
+  const [activePowerUps, setActivePowerUps] = useState<{ SHIELD: number; HUSH_SILENCER: number }>({
+    SHIELD: 0,
+    HUSH_SILENCER: 0,
+  });
+  // True once Hint is selected from the menu and still waiting on its
+  // trigger - a valid blank click for every type except WHOLE_VERSE, the
+  // Continue button (confirmWholeVerseHint) for WHOLE_VERSE.
+  const [hintArmed, setHintArmed] = useState(false);
+  // WORD_BANK's hint effect - the word-bank entry to glow, keyed by its text
+  // rather than a blank index since VerseParchment's word-bank rendering is
+  // per-word, not per-blank.
+  const [hintGlowWord, setHintGlowWord] = useState<string | null>(null);
+  // Transient "Click on a valid blank!" message shown when a Hint is armed
+  // and the player clicks an already-answered blank - self-clears via
+  // schedule(). The persistent "click a blank" prompt shown for the rest of
+  // targeting mode is derived below (see hintMessage), not stored here.
+  const [hintInvalidClickMessage, setHintInvalidClickMessage] = useState<string | null>(null);
+  // Check's pre-submit validation result - deliberately separate from the
+  // real wrongBlanks (which drives the disabled mistake-review beat): Check
+  // only highlights, it never submits or locks the parchment.
+  const [checkHighlightBlanks, setCheckHighlightBlanks] = useState<number[]>([]);
+  const [checkMessage, setCheckMessage] = useState<string | null>(null);
+  const [shieldPopupVisible, setShieldPopupVisible] = useState(false);
+
   const [answers, setAnswers] = useState<string[]>([]);
   const [wrongBlanks, setWrongBlanks] = useState<number[]>([]);
   const [gearPieces, setGearPieces] = useState<GearPieceState[]>(() =>
@@ -274,12 +310,15 @@ export function useSilencerBattle() {
   // Guards against a slow generation call from a PREVIOUS round committing its
   // result after a later round has already started its own.
   const responseGenerationIdRef = useRef(0);
-  // Which gear piece responseOptions/choiceReactions above were generated
+  // Which round's config responseOptions/choiceReactions above were generated
   // (or are currently generating) for - see the prefetch effect below. Lets
-  // that effect tell "already have/are fetching the right thing, do
-  // nothing" apart from "gear state just changed, this is now stale, fetch
-  // again" without re-deriving it from responseOptions' own content.
-  const prefetchedGearKeyRef = useRef<GearPieceKey | null>(null);
+  // that effect tell "already have/are fetching the right thing, do nothing"
+  // apart from "this is a new round, fetch again" - keyed on the round's own
+  // config object (a fresh reference every time roundNumber OR
+  // challengeVariant changes - see currentRound's useMemo) rather than the
+  // targeted gear piece key, since a rollback can revisit the same gear piece
+  // across genuinely different rounds and still needs fresh lines each time.
+  const prefetchedRoundRef = useRef<SilencerBattleRoundConfig | null>(null);
   // The Songbeast's thought-bubble reaction to each of the 3 tonal lines
   // above - generated in the SAME Gloo call as responseOptions (see
   // services/responseChoicesService.ts), cached here so the matching one is
@@ -291,11 +330,23 @@ export function useSilencerBattle() {
   useEffect(() => {
     choiceReactionsRef.current = choiceReactions;
   }, [choiceReactions]);
+  // The Silencer's own tone-keyed comeback line reacting to each of the 3
+  // tonal lines above - generated in the SAME Gloo call as responseOptions
+  // (see services/responseChoicesService.ts), so whichever one matches the
+  // tone the player actually picks is already in hand the instant
+  // selectResponse() below needs it as this round's RESILENCE-beat
+  // temptation line. Mirrored into a ref for the same reason as
+  // choiceReactionsRef above. null (or a tone missing from it) falls back to
+  // the static per-tier config line, same as before this existed.
+  const [choiceRebuttals, setChoiceRebuttals] = useState<Record<ResponseTone, string> | null>(null);
+  const choiceRebuttalsRef = useRef(choiceRebuttals);
+  useEffect(() => {
+    choiceRebuttalsRef.current = choiceRebuttals;
+  }, [choiceRebuttals]);
   // null until a fresh line arrives for this round - the displayed
   // temptationLine falls back to the static per-tier config line until then,
   // so RESILENCE is never left without a caption to show.
   const [freshTemptationLine, setFreshTemptationLine] = useState<string | null>(null);
-  const temptationGenerationIdRef = useRef(0);
   // The Songbeast's re-silence-beat thought, generated from the Silencer's
   // own (fresh-or-fallback) temptation line content once that resolves - see
   // services/resilenceThoughtService.ts. Mirrored into a ref so
@@ -470,9 +521,9 @@ export function useSilencerBattle() {
         : null,
     [currentRound, verseText, distractorLookup]
   );
-  // Prefers the fresh, gear-piece-specific line once generated (see
-  // services/temptationLineService.ts); falls back to the static per-tier
-  // line while it's still generating or if generation ultimately fails.
+  // Prefers the fresh, tone-specific Silencer rebuttal resolved in
+  // selectResponse below (see services/responseChoicesService.ts); falls
+  // back to the static per-tier line if that tone's rebuttal never arrived.
   const temptationLine = freshTemptationLine ?? currentRound?.temptationLine ?? '';
   const isReviewingMistake = phase === 'CHALLENGE' && wrongBlanks.length > 0;
   // Looks up against whichever options were actually shown on CHOICE (fresh
@@ -490,6 +541,14 @@ export function useSilencerBattle() {
   if (challenge !== prevChallenge) {
     setPrevChallenge(challenge);
     setAnswers(challenge ? Array(challenge.blankCount).fill('') : []);
+    // A fresh challenge invalidates any in-progress Hint targeting or stale
+    // Check result from the previous round - Shield/Hush Silencer are
+    // untouched here since they're meant to carry over across challenges.
+    setHintArmed(false);
+    setHintGlowWord(null);
+    setHintInvalidClickMessage(null);
+    setCheckHighlightBlanks([]);
+    setCheckMessage(null);
   }
 
   const goToRound = useCallback((newRoundNumber: number) => {
@@ -526,11 +585,11 @@ export function useSilencerBattle() {
     setProgressScore(0);
     setSelectedTone(null);
     responseGenerationIdRef.current += 1;
-    prefetchedGearKeyRef.current = null;
+    prefetchedRoundRef.current = null;
     setResponseOptions(null);
     setChoiceReactions(null);
+    setChoiceRebuttals(null);
     setResponsesLoading(false);
-    temptationGenerationIdRef.current += 1;
     setFreshTemptationLine(null);
     resilenceThoughtGenerationIdRef.current += 1;
     setFreshResilenceThought(null);
@@ -543,6 +602,13 @@ export function useSilencerBattle() {
     setShowTemptationLine(false);
     setShowChosenLine(false);
     setShowRestoredBanner(false);
+    setActivePowerUps({ SHIELD: 0, HUSH_SILENCER: 0 });
+    setHintArmed(false);
+    setHintGlowWord(null);
+    setHintInvalidClickMessage(null);
+    setCheckHighlightBlanks([]);
+    setCheckMessage(null);
+    setShieldPopupVisible(false);
     setPhase('CHALLENGE');
   }, [bibleVersionId]);
 
@@ -605,6 +671,23 @@ export function useSilencerBattle() {
       return next;
     });
     setWrongBlanks((prev) => prev.filter((i) => i !== blankIndex));
+    setCheckHighlightBlanks((prev) => prev.filter((i) => i !== blankIndex));
+  }, []);
+
+  // Shared by a real correct submission and Free Pass's instant "auto-
+  // complete as correct" - see activateFreePass below. No response-choice
+  // kick-off here - see the prefetch effect below, which starts that
+  // generation as soon as the CHALLENGE targeting this same gear piece first
+  // appears, well before the player even answers. By the time a correct
+  // answer lands here, it's usually already resolved (or resolving) rather
+  // than starting from zero. The Silencer's RESILENCE-beat comeback line is
+  // prefetched right along with it (one per tone, in that same call) - see
+  // selectResponse below for where the matching one is picked out once the
+  // player's actual tone is known.
+  const handleCorrectAnswer = useCallback(() => {
+    setGearPieces((prev) => applyGearCascade(prev, 2));
+    addLog('Correct!', 'battle');
+    setPhase('CORRECT');
   }, []);
 
   const submitAnswer = useCallback(() => {
@@ -612,12 +695,28 @@ export function useSilencerBattle() {
 
     const result = checkAnswers(challenge, answers);
     if (!result.correct) {
+      triggerShake();
+
+      // An active Shield fully absorbs the miss - same round, fresh and
+      // editable again (no red review beat, no streak/rollback tracking, no
+      // gear/progress change, no Silencer turn) once the "Good Try" banner
+      // clears. Only the "Shield activated" popup marks that anything
+      // happened. wrongBlanks is deliberately left untouched (not set) so
+      // the generic mistake-review effect below never fires for this path.
+      if (activePowerUps.SHIELD > 0) {
+        setActivePowerUps((prev) => ({ ...prev, SHIELD: prev.SHIELD - 1 }));
+        addLog('Shield absorbed the wrong answer.', 'battle');
+        setPhase('INCORRECT');
+        schedule(() => setShieldPopupVisible(true), INCORRECT_BANNER_HOLD_MS);
+        schedule(() => setShieldPopupVisible(false), INCORRECT_BANNER_HOLD_MS + 1200);
+        return;
+      }
+
       setWrongBlanks(result.wrongBlankIndices);
       setWrongStreak((s) => s + 1);
       setTotalWrongAnswers((n) => n + 1);
       missedChallengeTypeRef.current = challenge.type;
       setGearPieces((prev) => applyGearRestore(prev, 1));
-      triggerShake();
       addLog('Incorrect answer - those words did not match the verse.', 'battle');
       setPhase('INCORRECT');
 
@@ -644,46 +743,129 @@ export function useSilencerBattle() {
       return;
     }
 
-    setGearPieces((prev) => applyGearCascade(prev, 2));
-    addLog('Correct!', 'battle');
-    setPhase('CORRECT');
-    // No response-choice kick-off here anymore - see the prefetch effect
-    // below, which starts that generation as soon as the CHALLENGE targeting
-    // this same gear piece first appears, well before the player even
-    // answers. By the time a correct answer lands here, it's usually already
-    // resolved (or resolving) rather than starting from zero.
+    handleCorrectAnswer();
+  }, [phase, challenge, answers, wrongBlanks, gearPieces, triggerShake, activePowerUps, schedule, handleCorrectAnswer]);
 
-    // Same early kick-off for the Silencer's temptation line, referencing
-    // whichever piece it's about to put back on - the post-cascade gear
-    // state's restore target (see handleGearRemoved). Skipped on the final
-    // round: there's no comeback to narrate, finalRestoration() plays instead.
-    if (!isFinalRound) {
-      const postCascade = applyGearCascade(gearPieces, 2);
-      const restoreIndex = findGearRestoreTargetIndex(postCascade);
-      if (restoreIndex !== -1) {
-        const restoreKey = GEAR_PIECE_ORDER[restoreIndex];
-        const fallbackLine = currentRound?.temptationLine ?? '';
-        const fallbackThought = currentRound ? SILENCER_BATTLE_RESILENCE_THOUGHTS[currentRound.tier] : '';
-        const temptationId = ++temptationGenerationIdRef.current;
-        const resilenceThoughtId = ++resilenceThoughtGenerationIdRef.current;
-        setFreshTemptationLine(null);
-        setFreshResilenceThought(null);
-        getFreshTemptationLine(GEAR_PIECE_INFO[restoreKey], fallbackLine).then((line) => {
-          if (temptationGenerationIdRef.current !== temptationId) return; // a later round already started
-          setFreshTemptationLine(line);
+  // Only activatable while an editable challenge is actually showing - not
+  // during the read-only mistake-review beat (wrongBlanks.length > 0), which
+  // is still technically phase CHALLENGE.
+  const canActivatePowerUp = phase === 'CHALLENGE' && !!challenge && wrongBlanks.length === 0;
 
-          // Chained off the Silencer's own resolved line (fresh or its
-          // fallback) so the Songbeast's thought always reacts to whatever
-          // content actually ends up spoken - never a second, independent
-          // guess at what the Silencer said.
-          getFreshResilenceThought(line, fallbackThought).then((thought) => {
-            if (resilenceThoughtGenerationIdRef.current !== resilenceThoughtId) return; // a later round already started
-            setFreshResilenceThought(thought);
-          });
-        });
+  // Free Pass - fires instantly: decrements, then runs the exact same
+  // correct-answer flow a real submission would (see handleCorrectAnswer).
+  // Never enters activePowerUps - there's nothing to show in the banner for
+  // an instantaneous effect.
+  const activateFreePass = useCallback(() => {
+    if (!canActivatePowerUp || powerUps.FREE_PASS < 1) return;
+    setPowerUps((prev) => ({ ...prev, FREE_PASS: prev.FREE_PASS - 1 }));
+    handleCorrectAnswer();
+  }, [canActivatePowerUp, powerUps, setPowerUps, handleCorrectAnswer]);
+
+  // Shield/Hush Silencer - decrement the purchased count immediately and add
+  // to the battle-scoped active count; both linger until consumed (see
+  // submitAnswer's Shield branch and handleGearRemoved's Hush Silencer branch).
+  const activateShield = useCallback(() => {
+    if (!canActivatePowerUp || powerUps.SHIELD < 1) return;
+    setPowerUps((prev) => ({ ...prev, SHIELD: prev.SHIELD - 1 }));
+    setActivePowerUps((prev) => ({ ...prev, SHIELD: prev.SHIELD + 1 }));
+  }, [canActivatePowerUp, powerUps, setPowerUps]);
+
+  const activateHushSilencer = useCallback(() => {
+    if (!canActivatePowerUp || powerUps.HUSH_SILENCER < 1) return;
+    setPowerUps((prev) => ({ ...prev, HUSH_SILENCER: prev.HUSH_SILENCER - 1 }));
+    setActivePowerUps((prev) => ({ ...prev, HUSH_SILENCER: prev.HUSH_SILENCER + 1 }));
+  }, [canActivatePowerUp, powerUps, setPowerUps]);
+
+  // Check - activates immediately, reusable repeatedly, never lingers. Red-
+  // highlights whichever blanks are currently wrong without submitting,
+  // penalizing, or locking the parchment.
+  const activateCheck = useCallback(() => {
+    if (!canActivatePowerUp || !challenge || powerUps.CHECK < 1) return;
+    const result = checkAnswers(challenge, answers);
+    setPowerUps((prev) => ({ ...prev, CHECK: prev.CHECK - 1 }));
+    setCheckHighlightBlanks(result.wrongBlankIndices);
+    setCheckMessage(result.correct ? 'Everything is correct ✅' : 'Something is wrong ❌');
+  }, [canActivatePowerUp, challenge, answers, powerUps, setPowerUps]);
+
+  // Hint only arms here - see handleHintBlankClick/confirmWholeVerseHint
+  // below for where it actually decrements and fires, per the per-challenge-
+  // type rules in the design doc.
+  const activateHint = useCallback(() => {
+    if (!canActivatePowerUp || powerUps.HINT < 1) return;
+    setHintInvalidClickMessage(null);
+    setHintArmed(true);
+  }, [canActivatePowerUp, powerUps]);
+
+  // Persistent instructional prompt shown for the whole time Hint is armed -
+  // WHOLE_VERSE gets its own dedicated "This hint fills in the next word."
+  // prompt inside VerseParchment instead (there's no individual blank to
+  // click there), so this only applies to the other types. Derived rather
+  // than stored so it never goes stale and automatically reappears once
+  // hintInvalidClickMessage's transient override clears (see hintMessage below).
+  const hintTargetPrompt =
+    hintArmed && challenge && challenge.type !== 'WHOLE_VERSE' ? 'Click on a blank to reveal its answer!' : null;
+  const hintMessage = hintInvalidClickMessage ?? hintTargetPrompt;
+
+  // Fired by VerseParchment when the player clicks a blank while Hint is
+  // armed, for every challenge type except WHOLE_VERSE (which has no
+  // individual blanks to click - see confirmWholeVerseHint instead). An
+  // already-answered blank is invalid: shows a transient message and leaves
+  // the Hint armed/unconsumed.
+  const handleHintBlankClick = useCallback(
+    (blankIndex: number) => {
+      if (!hintArmed || !challenge) return;
+      const alreadyAnswered = (answers[blankIndex] ?? '').trim() !== '';
+      if (alreadyAnswered) {
+        setHintInvalidClickMessage('Click on a valid blank!');
+        schedule(() => setHintInvalidClickMessage(null), 2000);
+        return;
       }
+      const blank = challenge.segments.find(
+        (s): s is Extract<ChallengeSegment, { kind: 'blank' }> => s.kind === 'blank' && s.blankIndex === blankIndex
+      );
+      if (!blank) return;
+
+      setPowerUps((prev) => ({ ...prev, HINT: prev.HINT - 1 }));
+      setHintArmed(false);
+      if (challenge.type === 'WORD_BANK') {
+        setHintGlowWord(blank.answer);
+      } else {
+        setAnswer(blankIndex, blank.answer);
+      }
+    },
+    [hintArmed, challenge, answers, schedule, setPowerUps, setAnswer]
+  );
+
+  // WHOLE_VERSE's Hint fires on Continue, not on menu selection - fills the
+  // word at the position immediately after however many whitespace-separated
+  // words are already in the box (an empty box fills word #1), keyed off
+  // word count/position rather than what the player actually typed there.
+  const confirmWholeVerseHint = useCallback(() => {
+    if (!hintArmed || !challenge || challenge.type !== 'WHOLE_VERSE') return;
+    const current = answers[0] ?? '';
+    const typedWordCount = current.split(/\s+/).filter(Boolean).length;
+    const verseWords = tokenizeVerseWords(verseText);
+    const nextWord = verseWords[typedWordCount]?.value;
+    if (nextWord === undefined) {
+      setHintArmed(false);
+      return;
     }
-  }, [phase, challenge, answers, wrongBlanks, gearPieces, isFinalRound, currentRound, triggerShake]);
+    const separator = current.length === 0 || /\s$/.test(current) ? '' : ' ';
+    setPowerUps((prev) => ({ ...prev, HINT: prev.HINT - 1 }));
+    setHintArmed(false);
+    setAnswer(0, `${current}${separator}${nextWord}`);
+  }, [hintArmed, challenge, answers, verseText, setPowerUps, setAnswer]);
+
+  const activatePowerUp = useCallback(
+    (type: PowerUpType) => {
+      if (type === 'HINT') return activateHint();
+      if (type === 'FREE_PASS') return activateFreePass();
+      if (type === 'SHIELD') return activateShield();
+      if (type === 'HUSH_SILENCER') return activateHushSilencer();
+      if (type === 'CHECK') return activateCheck();
+    },
+    [activateHint, activateFreePass, activateShield, activateHushSilencer, activateCheck]
+  );
 
   const selectResponse = useCallback((tone: ResponseTone) => {
     setSelectedTone(tone);
@@ -692,7 +874,27 @@ export function useSilencerBattle() {
     const reaction = (choiceReactionsRef.current ?? SILENCER_BATTLE_CHOICE_THOUGHTS)[tone];
     setThoughtBubbleContent({ text: reaction, beat: 'CHOICE' });
     setPhase((prev) => (prev === 'CHOICE' ? 'GEAR_REMOVED' : prev));
-  }, []);
+
+    // Resolves the Silencer's RESILENCE-beat comeback now that the player's
+    // actual tone is known - the tone-keyed rebuttal generated alongside the
+    // response choices themselves (see services/responseChoicesService.ts),
+    // so the Silencer's re-silence taunt always answers what the player
+    // actually just said, not an independent guess made before the pick.
+    // Skipped on the final round: there's no comeback to narrate,
+    // finalRestoration() plays instead.
+    if (!isFinalRound) {
+      const fallbackThought = currentRound ? SILENCER_BATTLE_RESILENCE_THOUGHTS[currentRound.tier] : '';
+      const rebuttal = choiceRebuttalsRef.current?.[tone] ?? null;
+      const line = rebuttal ?? currentRound?.temptationLine ?? '';
+      setFreshTemptationLine(rebuttal);
+      setFreshResilenceThought(null);
+      const resilenceThoughtId = ++resilenceThoughtGenerationIdRef.current;
+      getFreshResilenceThought(line, fallbackThought).then((thought) => {
+        if (resilenceThoughtGenerationIdRef.current !== resilenceThoughtId) return; // a later round already started
+        setFreshResilenceThought(thought);
+      });
+    }
+  }, [isFinalRound, currentRound]);
 
   // Fired by the avatar the instant its removed gear item actually lands mid-
   // sequence - the chosen-response caption's (and paired thought bubble's)
@@ -725,11 +927,36 @@ export function useSilencerBattle() {
     // silence dip that usually follows is applied separately, in
     // handleSilencerTurnComplete, once THAT animation likewise finishes.
     setProgressScore((prev) => clampProgress(prev + BATTLE_PROGRESS.correctAnswerGain));
-    if (!isFinalRound) {
+    // Hush Silencer blocks the whole re-silence beat, not just this gear
+    // restore - see skipReSilence/onReSilenceBlocked below, which tell the
+    // avatar to skip its setback() animation entirely instead of playing it
+    // with nothing to show. Reading activePowerUps here (rather than only in
+    // the avatar) keeps the gear-state decision and the "does the animation
+    // play" decision looking at the exact same value at the exact same
+    // synchronous moment - no race between the two.
+    if (!isFinalRound && activePowerUps.HUSH_SILENCER === 0) {
       setGearPieces((prev) => applyGearRestore(prev, 1));
     }
     setPhase((prev) => (prev === 'GEAR_REMOVED' ? 'RESILENCE' : prev));
-  }, [isFinalRound]);
+  }, [isFinalRound, activePowerUps]);
+
+  // Fired by the avatar INSTEAD of ever calling setback() (see
+  // skipReSilence/onReSilenceBlocked passed to SongbeastBattleAvatar), when a
+  // Hush Silencer was active for this correct answer's turn - handleGearRemoved
+  // above already skipped the gear restore, so this only needs to do the
+  // matching bookkeeping handleSilencerTurnComplete would otherwise have done
+  // (minus the progress dip, since no re-silence actually happened) and move
+  // on to the next round after the same pacing delay the real beat would use.
+  const handleReSilenceBlocked = useCallback(() => {
+    setActivePowerUps((prev) => ({ ...prev, HUSH_SILENCER: prev.HUSH_SILENCER - 1 }));
+    addLog('Hush Silencer blocked the re-silence.', 'battle');
+    schedule(() => {
+      setWrongStreak(0);
+      setSelectedTone(null);
+      goToRound(roundNumberRef.current + 1);
+      setPhase('CHALLENGE');
+    }, POST_SILENCER_PARCHMENT_DELAY_MS);
+  }, [schedule, goToRound]);
 
   // Fired by the avatar the instant its re-silence animation begins - covers
   // both the correct-path chain (phase is RESILENCE) and the isolated
@@ -776,7 +1003,11 @@ export function useSilencerBattle() {
       // This branch only ever runs on non-final rounds (the final round
       // plays finalRestoration() instead of setback(), which fires
       // handleFinalRestorationComplete, not this), so no isFinalRound guard
-      // is needed here the way handleGearRemoved needs one for the gear.
+      // is needed here the way handleGearRemoved needs one for the gear. Also
+      // never runs when Hush Silencer is active - the avatar calls
+      // onReSilenceBlocked instead of ever playing setback() in that case
+      // (see handleReSilenceBlocked above), so this whole branch only fires
+      // for a real re-silence.
       setProgressScore((prev) => clampProgress(prev - PROGRESS_SETBACK_AMOUNT));
       setShowTemptationLine(false);
       setThoughtBubbleVisible(false);
@@ -826,41 +1057,59 @@ export function useSilencerBattle() {
     setPhase((prev) => (prev === 'RESILENCE' ? 'RESTORED' : prev));
   }, []);
 
+  // Fired by useSongbeastDebriefDialogue once its final scripted line is
+  // dismissed - shows the "Mission Complete!" banner + corner Continue
+  // button (see components/battle/MissionCompleteButton.tsx) rather than
+  // jumping straight back to the map, so the player gets a deliberate closing
+  // beat instead of the screen changing out from under their last click.
+  const finishDialogue = useCallback(() => {
+    setPhase((prev) => (prev === 'DIALOGUE' ? 'MISSION_COMPLETE' : prev));
+  }, []);
+
   const returnToMap = useCallback(() => {
     setPhase('COMPLETE');
     setCurrentScreen('OVERWORLD');
   }, [setCurrentScreen]);
 
-  // Prefetches the CHOICE screen's response lines + Songbeast reactions as
-  // soon as a challenge targeting a given gear piece is actually on screen -
-  // not after the player answers it. Which piece is targeted is already
-  // fully determined by the CURRENT gearPieces (the first not-yet-REMOVED
-  // one), so there's no need to wait for a correct answer to know it. In the
-  // common case the player spends several seconds solving the challenge
-  // itself, which is usually enough time for this to finish well before
-  // submitAnswer's correct branch would otherwise have kicked it off -
+  // Prefetches the CHOICE screen's response lines + Songbeast reactions +
+  // Silencer rebuttals as soon as a challenge for a new round is actually on
+  // screen - not after the player answers it. Which piece is targeted is
+  // already fully determined by the CURRENT gearPieces (the first
+  // not-yet-REMOVED one), so there's no need to wait for a correct answer to
+  // know it. In the common case the player spends several seconds solving the
+  // challenge itself, which is usually enough time for this to finish well
+  // before submitAnswer's correct branch would otherwise have kicked it off -
   // hiding Gloo's own latency behind that thinking time instead of adding to
-  // it. Re-fires whenever gearPieces actually changes (a wrong answer
-  // restores a level, shifting the target) - prefetchedGearKeyRef is what
-  // lets it tell "already have/are fetching the right one" apart from that.
+  // it. Deduped on currentRound's own object reference (prefetchedRoundRef),
+  // NOT on the targeted gear key - a rollback can send a later, genuinely
+  // different round back to the SAME gear piece (e.g. a repeat pass at
+  // headphones), and that still needs freshly generated lines rather than
+  // silently reusing the earlier round's, which keying on gear key alone
+  // would have skipped. Needs verseText (already resolved by the time phase
+  // is CHALLENGE - see startBattle) so the lines can be grounded in this
+  // battle's actual verse.
   useEffect(() => {
-    if (phase !== 'CHALLENGE') return;
+    if (phase !== 'CHALLENGE' || !verseText || !currentRound) return;
+    if (prefetchedRoundRef.current === currentRound) return;
+    prefetchedRoundRef.current = currentRound;
     const targetIndex = gearPieces.findIndex((p) => p !== 'REMOVED');
     const gearKey = GEAR_PIECE_ORDER[targetIndex === -1 ? GEAR_PIECE_ORDER.length - 1 : targetIndex];
-    if (prefetchedGearKeyRef.current === gearKey) return;
-    prefetchedGearKeyRef.current = gearKey;
 
     const generationId = ++responseGenerationIdRef.current;
     setResponseOptions(null);
     setChoiceReactions(null);
+    setChoiceRebuttals(null);
     setResponsesLoading(true);
-    getFreshResponseChoices(GEAR_PIECE_INFO[gearKey]).then(({ options, reactions }) => {
-      if (responseGenerationIdRef.current !== generationId) return; // a later gear change already started its own
-      setResponseOptions(options);
-      setChoiceReactions(reactions);
-      setResponsesLoading(false);
-    });
-  }, [phase, gearPieces]);
+    getFreshResponseChoices(GEAR_PIECE_INFO[gearKey], SILENCER_BATTLE_VERSE_REFERENCE, verseText).then(
+      ({ options, reactions, rebuttals }) => {
+        if (responseGenerationIdRef.current !== generationId) return; // a later round already started its own
+        setResponseOptions(options);
+        setChoiceReactions(reactions);
+        setChoiceRebuttals(rebuttals ?? null);
+        setResponsesLoading(false);
+      }
+    );
+  }, [phase, gearPieces, verseText, currentRound]);
 
   // CORRECT -> CHOICE: timed hold, not a user action.
   useEffect(() => {
@@ -907,6 +1156,15 @@ export function useSilencerBattle() {
   // button (see beginDialogue below) before the darkened DIALOGUE sequence starts.
   useEffect(() => {
     if (phase !== 'RESTORED') return;
+    // Battle end wipes all active power-up state - purchased counts (in
+    // GameContext) are untouched, only this battle-scoped state resets.
+    setActivePowerUps({ SHIELD: 0, HUSH_SILENCER: 0 });
+    setHintArmed(false);
+    setHintGlowWord(null);
+    setHintInvalidClickMessage(null);
+    setCheckHighlightBlanks([]);
+    setCheckMessage(null);
+    setShieldPopupVisible(false);
     const bannerTimer = setTimeout(() => setShowRestoredBanner(true), RESTORED_BANNER_DELAY_MS);
     const promptTimer = setTimeout(
       () => setPhase((prev) => (prev === 'RESTORED' ? 'DEBRIEF_PROMPT' : prev)),
@@ -945,7 +1203,7 @@ export function useSilencerBattle() {
   } = useSongbeastDebriefDialogue({
     active: phase === 'DIALOGUE',
     grantCucumbers: grantCucumberGift,
-    onComplete: returnToMap,
+    onComplete: finishDialogue,
   });
 
   return {
@@ -966,6 +1224,18 @@ export function useSilencerBattle() {
     isReviewingMistake,
     setAnswer,
     submitAnswer,
+
+    powerUps,
+    activePowerUps,
+    activatePowerUp,
+    hintArmed,
+    hintGlowWord,
+    hintMessage,
+    onHintBlankClick: handleHintBlankClick,
+    onConfirmWholeVerseHint: confirmWholeVerseHint,
+    checkHighlightBlanks,
+    checkMessage,
+    shieldPopupVisible,
 
     responses: responseOptions,
     responsesLoading,
@@ -999,6 +1269,12 @@ export function useSilencerBattle() {
     handleReSilenceEffectStart,
     handleSilencerTurnComplete,
     handleFinalRestorationComplete,
+    // Tells the avatar to skip its setback() re-silence animation entirely
+    // (no arm swing, no dark wave, no taunt line) for the upcoming correct-
+    // answer turn, and to call onReSilenceBlocked instead once the gear-
+    // removal cascade finishes - see handleGearRemoved/handleReSilenceBlocked above.
+    skipReSilence: activePowerUps.HUSH_SILENCER > 0,
+    onReSilenceBlocked: handleReSilenceBlocked,
 
     roundNumber,
     totalRounds: totalRoundsForFinish,

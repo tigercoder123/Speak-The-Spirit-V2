@@ -2,7 +2,7 @@ import { generateSongbeastResilenceThought } from '../app/actions/gloo';
 import { addLog as emitGameLog } from '../utils/gameEvents';
 import { truncateWords } from '../utils/truncateWords';
 
-// Same headroom as services/temptationLineService.ts - see that file for why
+// Same headroom as services/responseChoicesService.ts - see that file for why
 // 6s was too tight against Gloo's normal ~6-15s response times.
 const GENERATION_TIMEOUT_MS = 11000;
 

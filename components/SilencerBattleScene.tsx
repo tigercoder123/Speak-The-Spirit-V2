@@ -13,6 +13,9 @@ import TemptationLine from './battle/TemptationLine';
 import ChosenResponseLine from './battle/ChosenResponseLine';
 import DebriefContinueButton from './battle/DebriefContinueButton';
 import SongbeastDebriefDialogue from './battle/SongbeastDebriefDialogue';
+import MissionCompleteButton from './battle/MissionCompleteButton';
+import PowerUpMenu from './battle/PowerUpMenu';
+import ActivePowerUpBanner from './battle/ActivePowerUpBanner';
 
 export default function SilencerBattleScene() {
   const {
@@ -31,6 +34,17 @@ export default function SilencerBattleScene() {
     isReviewingMistake,
     setAnswer,
     submitAnswer,
+    powerUps,
+    activePowerUps,
+    activatePowerUp,
+    hintArmed,
+    hintGlowWord,
+    hintMessage,
+    onHintBlankClick,
+    onConfirmWholeVerseHint,
+    checkHighlightBlanks,
+    checkMessage,
+    shieldPopupVisible,
     responses,
     responsesLoading,
     selectResponse,
@@ -55,6 +69,8 @@ export default function SilencerBattleScene() {
     handleReSilenceEffectStart,
     handleSilencerTurnComplete,
     handleFinalRestorationComplete,
+    skipReSilence,
+    onReSilenceBlocked,
     roundNumber,
     totalRounds,
     beginDialogue,
@@ -63,6 +79,7 @@ export default function SilencerBattleScene() {
     advanceDialogue,
     acceptCucumberGift,
     chooseDialogueResponse,
+    returnToMap,
   } = useSilencerBattle();
 
   // Mirrors exactly which phases render a ParchmentOverlay below, so the
@@ -80,7 +97,8 @@ export default function SilencerBattleScene() {
     phase === 'CHOICE' ||
     (phase === 'RESTORED' && showRestoredBanner) ||
     phase === 'DEBRIEF_PROMPT' ||
-    phase === 'DIALOGUE';
+    phase === 'DIALOGUE' ||
+    phase === 'MISSION_COMPLETE';
 
   return (
     <div className="flex-1 flex flex-col justify-between">
@@ -126,6 +144,8 @@ export default function SilencerBattleScene() {
                 onReSilenceEffectStart={handleReSilenceEffectStart}
                 onFinalRestorationComplete={handleFinalRestorationComplete}
                 isFinalTurn={isFinalRound}
+                skipReSilence={skipReSilence}
+                onReSilenceBlocked={onReSilenceBlocked}
                 startRestored={avatarStartsRestored}
                 restorePercent={restorePercent}
                 restoreBarVisible={!isParchmentActive}
@@ -143,17 +163,30 @@ export default function SilencerBattleScene() {
               )}
 
               {phase === 'CHALLENGE' && challenge && (
-                <ParchmentOverlay>
-                  <VerseParchment
-                    verseReference={verseReference}
-                    challenge={challenge}
-                    answers={answers}
-                    wrongBlanks={wrongBlanks}
-                    disabled={isReviewingMistake}
-                    onAnswerChange={setAnswer}
-                    onSubmit={submitAnswer}
-                  />
-                </ParchmentOverlay>
+                <>
+                  <PowerUpMenu powerUps={powerUps} onSelect={activatePowerUp} />
+                  <ActivePowerUpBanner activePowerUps={activePowerUps} />
+                  <ParchmentOverlay>
+                    <VerseParchment
+                      verseReference={verseReference}
+                      challenge={challenge}
+                      answers={answers}
+                      wrongBlanks={wrongBlanks}
+                      disabled={isReviewingMistake}
+                      onAnswerChange={setAnswer}
+                      onSubmit={submitAnswer}
+                      hintTargeting={hintArmed && challenge.type !== 'WHOLE_VERSE'}
+                      onBlankClick={onHintBlankClick}
+                      hintGlowWord={hintGlowWord}
+                      checkHighlightBlanks={checkHighlightBlanks}
+                      wholeVerseHintPending={hintArmed && challenge.type === 'WHOLE_VERSE'}
+                      onConfirmWholeVerseHint={onConfirmWholeVerseHint}
+                    />
+                  </ParchmentOverlay>
+                  {hintMessage && <TemptationLine message={hintMessage} />}
+                  {checkMessage && <TemptationLine message={checkMessage} />}
+                  {shieldPopupVisible && <TemptationLine message="Shield activated! 🛡️" />}
+                </>
               )}
 
               {phase === 'CORRECT' && (
@@ -196,6 +229,15 @@ export default function SilencerBattleScene() {
                   onAcceptGift={acceptCucumberGift}
                   onChoose={chooseDialogueResponse}
                 />
+              )}
+
+              {phase === 'MISSION_COMPLETE' && (
+                <>
+                  <ParchmentOverlay>
+                    <FeedbackBanner text="Mission Complete! 🎉" />
+                  </ParchmentOverlay>
+                  <MissionCompleteButton onContinue={returnToMap} />
+                </>
               )}
             </div>
           </BattleIntroTransition>

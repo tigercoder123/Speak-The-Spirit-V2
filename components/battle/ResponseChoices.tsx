@@ -22,7 +22,7 @@ export default function ResponseChoices({ options, loading, onSelect }: Response
     <div className="bg-amber-100 border-4 border-black p-6 rounded-2xl text-black shadow-[4px_4px_0px_#000] relative overflow-hidden">
       <div className="absolute inset-0 bg-[radial-gradient(#eab308_1px,transparent_1px)] [background-size:16px_16px] opacity-20 pointer-events-none" />
       <p className="text-[10px] font-black uppercase tracking-wider text-amber-800 mb-4 text-center relative">
-        {showLoading ? 'The Songbeast searches for the words...' : 'Speak your response'}
+        {showLoading ? 'Searching for words...' : 'Speak your response'}
       </p>
 
       <div className="flex flex-col gap-3 relative">
@@ -32,7 +32,7 @@ export default function ResponseChoices({ options, loading, onSelect }: Response
                 key={i}
                 className="bg-white border-2 border-black rounded-xl px-4 py-3 animate-pulse"
               >
-                <span className="block h-2.5 w-24 rounded bg-purple-200" />
+                <span className="block h-2.5 w-24 rounded bg-green-200" />
                 <span className="mt-2 block h-3 w-full rounded bg-amber-200" />
               </div>
             ))
@@ -42,7 +42,7 @@ export default function ResponseChoices({ options, loading, onSelect }: Response
                 onClick={() => onSelect(option.tone)}
                 className="text-left bg-white border-2 border-black rounded-xl px-4 py-3 neo-btn"
               >
-                <span className="block text-[10px] font-black uppercase tracking-wide text-purple-700">
+                <span className="block text-[10px] font-black uppercase tracking-wide text-green-700">
                   {option.label}
                 </span>
                 <span className="mt-1 block text-sm font-bold italic leading-snug">{option.message}</span>

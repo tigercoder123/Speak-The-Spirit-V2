@@ -12,6 +12,19 @@ interface VerseParchmentProps {
   disabled: boolean;
   onAnswerChange: (blankIndex: number, value: string) => void;
   onSubmit: () => void;
+  /** True while the Hint power-up is armed and waiting on a blank click - every
+   * type except WHOLE_VERSE, which uses wholeVerseHintPending instead. */
+  hintTargeting?: boolean;
+  onBlankClick?: (blankIndex: number) => void;
+  /** WORD_BANK's Hint effect - the word-bank entry text to glow gold. */
+  hintGlowWord?: string | null;
+  /** Check power-up's pre-submit highlight - styled like wrongBlanks (red) but
+   * never disables the parchment the way a real wrong answer does. */
+  checkHighlightBlanks?: number[];
+  /** WHOLE_VERSE's Hint prompt ("This hint fills in the next word.") shown in
+   * place of blank-click targeting, since there's only one blank to target. */
+  wholeVerseHintPending?: boolean;
+  onConfirmWholeVerseHint?: () => void;
 }
 
 // Which word-bank words are still available to drag, given which have
@@ -48,6 +61,12 @@ export default function VerseParchment({
   disabled,
   onAnswerChange,
   onSubmit,
+  hintTargeting = false,
+  onBlankClick,
+  hintGlowWord = null,
+  checkHighlightBlanks = [],
+  wholeVerseHintPending = false,
+  onConfirmWholeVerseHint,
 }: VerseParchmentProps) {
   const isWholeVerse = challenge.type === 'WHOLE_VERSE';
   const allFilled = isWholeVerse ? (answers[0] ?? '').trim() !== '' : answers.every((a) => a.trim() !== '');
@@ -116,6 +135,17 @@ export default function VerseParchment({
               wrongBlanks.length > 0 ? 'border-red-600 text-red-700' : 'border-black'
             }`}
           />
+          {wholeVerseHintPending && (
+            <div className="flex flex-col items-center gap-2 bg-yellow-50 border-2 border-yellow-500 rounded-lg p-2">
+              <p className="text-xs font-bold text-yellow-800">This hint fills in the next word.</p>
+              <button
+                onClick={onConfirmWholeVerseHint}
+                className="neo-btn bg-yellow-400 hover:bg-yellow-300 text-black font-black text-xs px-4 py-1.5 rounded-lg uppercase"
+              >
+                Continue
+              </button>
+            </div>
+          )}
         </div>
       ) : (
         <p className="relative text-sm font-bold italic leading-relaxed text-center flex flex-wrap items-center justify-center gap-1.5">
@@ -125,37 +155,61 @@ export default function VerseParchment({
             }
 
             const value = answers[segment.blankIndex] ?? '';
-            const isWrong = wrongBlanks.includes(segment.blankIndex);
+            const isWrong = wrongBlanks.includes(segment.blankIndex) || checkHighlightBlanks.includes(segment.blankIndex);
             const blankBorderClass = isWrong ? 'border-red-600 text-red-700' : 'border-black';
 
             if (segment.options) {
+              // While Hint is targeting, a plain onClick on a native <select>
+              // isn't reliable - the browser's own dropdown list opens (and
+              // can swallow/precede the click) before React's handler ever
+              // fires, so the hint's blank-click almost never actually
+              // registers. A transparent button laid over the whole select
+              // intercepts the click instead, so it never even reaches the
+              // dropdown while targeting is active.
               return (
-                <select
-                  key={i}
-                  ref={(el) => {
-                    if (el) typedBlankRefs.current.set(segment.blankIndex, el);
-                    else typedBlankRefs.current.delete(segment.blankIndex);
-                  }}
-                  value={value}
-                  disabled={disabled}
-                  onChange={(e) => onAnswerChange(segment.blankIndex, e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key !== ' ') return;
-                    e.preventDefault();
-                    focusNextEmptyTypedBlank(segment.blankIndex);
-                  }}
-                  className={`border-2 rounded px-1 py-0.5 bg-white font-black not-italic text-xs uppercase disabled:opacity-70 ${blankBorderClass}`}
-                >
-                  <option value="" disabled>...</option>
-                  {segment.options.map((opt) => (
-                    <option key={opt} value={opt}>{opt}</option>
-                  ))}
-                </select>
+                <span key={i} className="relative inline-block">
+                  <select
+                    ref={(el) => {
+                      if (el) typedBlankRefs.current.set(segment.blankIndex, el);
+                      else typedBlankRefs.current.delete(segment.blankIndex);
+                    }}
+                    value={value}
+                    disabled={disabled}
+                    onChange={(e) => onAnswerChange(segment.blankIndex, e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key !== ' ') return;
+                      e.preventDefault();
+                      focusNextEmptyTypedBlank(segment.blankIndex);
+                    }}
+                    className={`border-2 rounded px-1 py-0.5 bg-white font-black not-italic text-xs uppercase disabled:opacity-70 ${blankBorderClass} ${
+                      hintTargeting && !disabled ? 'hint-click-target' : ''
+                    }`}
+                  >
+                    <option value="" disabled>...</option>
+                    {segment.options.map((opt) => (
+                      <option key={opt} value={opt}>{opt}</option>
+                    ))}
+                  </select>
+                  {hintTargeting && !disabled && (
+                    <button
+                      type="button"
+                      onClick={() => onBlankClick?.(segment.blankIndex)}
+                      aria-label="Click to target this blank for Hint"
+                      className="absolute inset-0 cursor-pointer"
+                    />
+                  )}
+                </span>
               );
             }
 
             if (challenge.type === 'WORD_BANK') {
               const filledClass = value ? blankBorderClass : 'border-amber-800/40';
+              // While Hint is targeting an unanswered blank, it's otherwise a
+              // thin min-w-[64px] strip sitting inline in a wrapped paragraph -
+              // easy to miss/misclick. Bumping the padding widens the actual
+              // hit area (not just a cosmetic glow), and hint-click-target
+              // makes it obvious which spot to click.
+              const isHintTarget = hintTargeting && !value && !disabled;
               return (
                 <span
                   key={i}
@@ -169,11 +223,16 @@ export default function VerseParchment({
                     if (word) onAnswerChange(segment.blankIndex, word);
                   }}
                   onClick={() => {
-                    if (!disabled && value) onAnswerChange(segment.blankIndex, '');
+                    if (disabled) return;
+                    if (hintTargeting) {
+                      onBlankClick?.(segment.blankIndex);
+                      return;
+                    }
+                    if (value) onAnswerChange(segment.blankIndex, '');
                   }}
-                  className={`mx-1 inline-block min-w-[64px] border-b-2 px-2 text-center align-middle font-black not-italic text-xs ${filledClass} ${
+                  className={`mx-1 inline-block min-w-[64px] border-b-2 text-center align-middle font-black not-italic text-xs ${filledClass} ${
                     value && !disabled ? 'cursor-pointer' : ''
-                  }`}
+                  } ${isHintTarget ? 'hint-click-target cursor-pointer px-3 py-1' : 'px-2'}`}
                 >
                   {value || ' '}
                 </span>
@@ -191,12 +250,17 @@ export default function VerseParchment({
                 value={value}
                 disabled={disabled}
                 onChange={(e) => onAnswerChange(segment.blankIndex, e.target.value)}
+                onClick={() => {
+                  if (hintTargeting) onBlankClick?.(segment.blankIndex);
+                }}
                 onKeyDown={(e) => {
                   if (e.key !== ' ') return;
                   e.preventDefault();
                   focusNextEmptyTypedBlank(segment.blankIndex);
                 }}
-                className={`border-0 border-b-2 rounded-none px-1 py-0.5 bg-transparent font-black not-italic text-xs w-24 text-center disabled:opacity-70 ${blankBorderClass}`}
+                className={`border-0 border-b-2 rounded-none px-1 py-0.5 bg-transparent font-black not-italic text-xs w-24 text-center disabled:opacity-70 ${blankBorderClass} ${
+                  hintTargeting && !value && !disabled ? 'hint-click-target' : ''
+                }`}
               />
             );
           })}
@@ -217,7 +281,7 @@ export default function VerseParchment({
                 }}
                 className={`select-none border-2 border-black rounded-full bg-white px-3 py-1 font-black not-italic text-xs uppercase ${
                   disabled ? 'opacity-60' : 'cursor-pointer active:cursor-grabbing'
-                }`}
+                } ${word === hintGlowWord ? 'hint-glow' : ''}`}
               >
                 {word}
               </span>
@@ -226,13 +290,7 @@ export default function VerseParchment({
         </div>
       )}
 
-      {wrongBlanks.length > 0 && (
-        <p className="relative text-xs font-black text-red-700 uppercase text-center mt-3 animate-shake-box">
-          Static interference! Try again.
-        </p>
-      )}
-
-      <div className="relative flex justify-center mt-4">
+<div className="relative flex justify-center mt-4">
         <button
           onClick={onSubmit}
           disabled={disabled || !allFilled}

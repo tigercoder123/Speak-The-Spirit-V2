@@ -19,23 +19,30 @@ function timeoutAfter(ms: number): Promise<never> {
 
 /**
  * Generates 3 fresh, tone-varied response lines for the given gear piece via
- * Gloo, along with the Songbeast's own matching thought-bubble reaction to
- * each one (see components/battle/ThoughtBubble.tsx) - generated together in
- * the same Gloo call. Falls back to the static config lines/reactions
- * (SILENCER_BATTLE_RESPONSES / SILENCER_BATTLE_CHOICE_THOUGHTS) if the call
- * errors, returns an incomplete shape, or doesn't resolve within
- * GENERATION_TIMEOUT_MS. Always resolves - callers never need their own
- * try/catch or timeout handling, and the CHOICE screen is never blocked
- * waiting on this.
+ * Gloo, grounded in the verse the player is currently memorizing, along with
+ * the Songbeast's own matching thought-bubble reaction to each one (see
+ * components/battle/ThoughtBubble.tsx) and the Silencer's own matching
+ * comeback line - the RESILENCE beat's temptation line, once the player's
+ * tone is known (see hooks/useSilencerBattle.ts's selectResponse) - all
+ * generated together in the same Gloo call. Falls back to the static config
+ * lines/reactions (SILENCER_BATTLE_RESPONSES / SILENCER_BATTLE_CHOICE_THOUGHTS)
+ * with no rebuttals if the call errors, returns an incomplete shape, or
+ * doesn't resolve within GENERATION_TIMEOUT_MS. Always resolves - callers
+ * never need their own try/catch or timeout handling, and the CHOICE screen
+ * is never blocked waiting on this.
  */
-export async function getFreshResponseChoices(gearPiece: GearPieceInfo): Promise<ResponseChoicesResult> {
+export async function getFreshResponseChoices(
+  gearPiece: GearPieceInfo,
+  verseReference: string,
+  verseText: string
+): Promise<ResponseChoicesResult> {
   try {
     const result = await Promise.race([
-      generateSilencerResponseChoices(gearPiece.name, gearPiece.description),
+      generateSilencerResponseChoices(gearPiece.name, gearPiece.description, gearPiece.lie, verseReference, verseText),
       timeoutAfter(GENERATION_TIMEOUT_MS),
     ]);
 
-    if ('error' in result || !result.lines || !result.reactions) {
+    if ('error' in result || !result.lines || !result.reactions || !result.rebuttals) {
       throw new Error('error' in result ? result.error : 'Gloo returned an incomplete response.');
     }
 
@@ -49,6 +56,11 @@ export async function getFreshResponseChoices(gearPiece: GearPieceInfo): Promise
         gentle: truncateWords(result.reactions.gentle),
         firm: truncateWords(result.reactions.firm),
         warm: truncateWords(result.reactions.warm),
+      },
+      rebuttals: {
+        gentle: `"${result.rebuttals.gentle.trim()}"`,
+        firm: `"${result.rebuttals.firm.trim()}"`,
+        warm: `"${result.rebuttals.warm.trim()}"`,
       },
     };
   } catch (err: unknown) {

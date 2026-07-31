@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { addLog as emitGameLog } from '../utils/gameEvents';
 import { supabase, supabaseService } from '../services/supabaseService';
 import type { Position } from '../hooks/usePlayerWalker';
+import { DEFAULT_POWER_UP_COUNTS, type PowerUpType } from '../config/powerUpConfig';
 
 export type Screen = 'INTRO' | 'OVERWORLD' | 'QUEST' | 'BATTLE' | 'CHEST_RETURN' | 'DEBRIEF' | 'SHOP';
 
@@ -58,6 +59,10 @@ interface GameContextType {
   setTickets: (val: number | ((prev: number) => number)) => void;
   hasHolyWater: boolean;
   setHasHolyWater: (val: boolean) => void;
+  powerUps: Record<PowerUpType, number>;
+  setPowerUps: (
+    val: Record<PowerUpType, number> | ((prev: Record<PowerUpType, number>) => Record<PowerUpType, number>)
+  ) => void;
 
   // Progression Tracking
   clearedIslands: string[];
@@ -142,7 +147,13 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const [cupcakes, setCupcakesState] = useState<number>(() => getSavedReward('cupcakes') ?? 0);
   const [cucumbers, setCucumbersState] = useState<number>(() => getSavedReward('cucumbers') ?? 0);
   const [tickets, setTicketsState] = useState<number>(() => getSavedReward('tickets') ?? 0);
-  const [hasHolyWater, setHasHolyWater] = useState<boolean>(false);
+  // hasHolyWater/powerUps persist the same way as the currencies above -
+  // localStorage bundle always, plus a Supabase saveProfile write when
+  // logged in (see setHasHolyWater/setPowerUps below).
+  const [hasHolyWater, setHasHolyWaterState] = useState<boolean>(() => getSavedReward('hasHolyWater') ?? false);
+  const [powerUps, setPowerUpsState] = useState<Record<PowerUpType, number>>(
+    () => getSavedReward('powerUps') ?? DEFAULT_POWER_UP_COUNTS
+  );
 
   // Progression
   const [clearedIslands, setClearedIslands] = useState<string[]>([]);
@@ -177,11 +188,19 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   }, [router]);
 
   // --- MOCK SMART CONTRACT BRIDGE (LocalStorage) ---
-  const persistRewards = (newCupcakes: number, newCucumbers: number, newTickets: number) => {
+  const persistRewards = (
+    newCupcakes: number,
+    newCucumbers: number,
+    newTickets: number,
+    newHasHolyWater: boolean,
+    newPowerUps: Record<PowerUpType, number>
+  ) => {
     localStorage.setItem('sts_rewards', JSON.stringify({
       cupcakes: newCupcakes,
       cucumbers: newCucumbers,
       tickets: newTickets,
+      hasHolyWater: newHasHolyWater,
+      powerUps: newPowerUps,
     }));
   };
 
@@ -207,7 +226,8 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setCucumbersState(0);
     setTicketsState(0);
     setClearedIslands([]);
-    setHasHolyWater(false);
+    setHasHolyWaterState(false);
+    setPowerUpsState(DEFAULT_POWER_UP_COUNTS);
     setFeedback('');
 
     emitGameLog("Player session ended. Game state cleared.", "system");
@@ -221,6 +241,11 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         setCupcakesState(sCup);
         setCucumbersState(sCuc);
         setTicketsState(sTix);
+        // hasHolyWater/powerUps are left untouched here - this path only
+        // runs when there's no Supabase profile to read from at all (not
+        // logged in, or the fetch itself failed), so they just keep
+        // whatever their own useState initializers already hydrated from
+        // localStorage above.
       } catch (e) {
         console.error("Failed to parse saved rewards", e);
       }
@@ -250,8 +275,19 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
 
         const loadedIslands = profile.clearedIslands || [];
         setClearedIslands(loadedIslands);
-        
-        persistRewards(profile.cupcakes ?? 5, profile.cucumbers ?? 5, profile.tickets ?? 1);
+
+        const loadedHasHolyWater = profile.hasHolyWater ?? false;
+        const loadedPowerUps = profile.powerUps ?? DEFAULT_POWER_UP_COUNTS;
+        setHasHolyWaterState(loadedHasHolyWater);
+        setPowerUpsState(loadedPowerUps);
+
+        persistRewards(
+          profile.cupcakes ?? 5,
+          profile.cucumbers ?? 5,
+          profile.tickets ?? 1,
+          loadedHasHolyWater,
+          loadedPowerUps
+        );
       } else {
         loadOfflineFallback();
       }
@@ -269,6 +305,8 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     clearedIslands?: string[];
     bible_version_id?: number;
     language?: string;
+    hasHolyWater?: boolean;
+    powerUps?: Record<PowerUpType, number>;
   }) => {
     try {
       await supabaseService.saveProfile(id, updatedFields);
@@ -311,7 +349,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setCupcakesState((prev) => {
       const next = typeof val === 'function' ? val(prev) : val;
       queueMicrotask(() => {
-        persistRewards(next, cucumbers, tickets);
+        persistRewards(next, cucumbers, tickets, hasHolyWater, powerUps);
         if (userId) {
           saveProfile(userId, { cupcakes: next });
         }
@@ -324,7 +362,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setCucumbersState((prev) => {
       const next = typeof val === 'function' ? val(prev) : val;
       queueMicrotask(() => {
-        persistRewards(cupcakes, next, tickets);
+        persistRewards(cupcakes, next, tickets, hasHolyWater, powerUps);
         if (userId) {
           saveProfile(userId, { cucumbers: next });
         }
@@ -337,9 +375,34 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setTicketsState((prev) => {
       const next = typeof val === 'function' ? val(prev) : val;
       queueMicrotask(() => {
-        persistRewards(cupcakes, cucumbers, next);
+        persistRewards(cupcakes, cucumbers, next, hasHolyWater, powerUps);
         if (userId) {
           saveProfile(userId, { tickets: next });
+        }
+      });
+      return next;
+    });
+  };
+
+  const setHasHolyWater = (val: boolean) => {
+    setHasHolyWaterState(val);
+    queueMicrotask(() => {
+      persistRewards(cupcakes, cucumbers, tickets, val, powerUps);
+      if (userId) {
+        saveProfile(userId, { hasHolyWater: val });
+      }
+    });
+  };
+
+  const setPowerUps = (
+    val: Record<PowerUpType, number> | ((prev: Record<PowerUpType, number>) => Record<PowerUpType, number>)
+  ) => {
+    setPowerUpsState((prev) => {
+      const next = typeof val === 'function' ? val(prev) : val;
+      queueMicrotask(() => {
+        persistRewards(cupcakes, cucumbers, tickets, hasHolyWater, next);
+        if (userId) {
+          saveProfile(userId, { powerUps: next });
         }
       });
       return next;
@@ -407,7 +470,8 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setTicketsState(resetTickets);
     setClearedIslands([]);
 
-    setHasHolyWater(false);
+    setHasHolyWaterState(false);
+    setPowerUpsState(DEFAULT_POWER_UP_COUNTS);
     setFeedback('');
     emitGameLog("Game values reset to start. Starting over...", "system");
 
@@ -417,10 +481,11 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         cucumbers: resetCucumbers,
         tickets: resetTickets,
         clearedIslands: [],
+        hasHolyWater: false,
+        powerUps: DEFAULT_POWER_UP_COUNTS,
       });
-    } else {
-      persistRewards(resetCupcakes, resetCucumbers, resetTickets);
     }
+    persistRewards(resetCupcakes, resetCucumbers, resetTickets, false, DEFAULT_POWER_UP_COUNTS);
   };
 
   return (
@@ -452,6 +517,8 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         setTickets,
         hasHolyWater,
         setHasHolyWater,
+        powerUps,
+        setPowerUps,
 
         clearedIslands,
         clearIsland,

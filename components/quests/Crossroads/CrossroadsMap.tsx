@@ -66,7 +66,7 @@ export default function CrossroadsMap({
     if (stageState === 'x-marks') {
       setPlayerPos({ x: 50, y: 360 }); // Spawn left
     } else if (stageState === 'ghosts') {
-      setPlayerPos({ x: 400, y: 200 }); // Spawn high up in the ghost path
+      setPlayerPos({ x: 400, y: 560 }); // Spawn at the bottom of ghosts.png, just above the y >= 580 escape trigger
     }
   }, [stageState, setPlayerPos]);
 

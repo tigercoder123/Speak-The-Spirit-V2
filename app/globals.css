@@ -100,7 +100,9 @@ body {
   line-height: 1.15;
   color: #1e1b4b;
   text-align: center;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .thought-bubble-dot {
@@ -161,6 +163,54 @@ body {
   pointer-events: none;
 }
 
+/* Hint power-up's WORD_BANK effect (components/battle/VerseParchment.tsx) -
+   glows the word-bank entry matching whichever blank the player targeted,
+   using the same gold as the rest of the parchment's neobrutalist palette. */
+@keyframes hint-glow-pulse {
+  0%, 100% { box-shadow: 0 0 0px 2px rgba(250, 204, 21, 0.9); }
+  50% { box-shadow: 0 0 12px 4px rgba(250, 204, 21, 0.9); }
+}
+.hint-glow {
+  animation: hint-glow-pulse 1.1s ease-in-out infinite;
+}
+
+/* Hint power-up's "click here" indicator (VerseParchment) - shown on every
+   clickable, unanswered blank while a Hint is armed and waiting on the
+   player's click. Reuses .hint-glow's pulse under a distinct name since the
+   two never show at the same time (this is pre-click targeting, .hint-glow
+   is the post-click WORD_BANK reveal). */
+.hint-click-target {
+  animation: hint-glow-pulse 1.1s ease-in-out infinite;
+  cursor: pointer;
+}
+
+/* Shop item tooltips (components/Tooltip.tsx, used from BasecampShop.tsx) -
+   pure CSS hover/focus, no JS state: wrap a trigger + its Tooltip in
+   .shop-tooltip-wrap and the tooltip fades in on :hover or :focus-within of
+   that wrapper (so keyboard focus on the trigger button shows it too, not
+   just mouse hover). The tooltip stays in the DOM at all times (only
+   visually hidden) so its aria-describedby reference is always valid. */
+.shop-tooltip-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.shop-tooltip {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+.shop-tooltip-wrap:hover .shop-tooltip,
+.shop-tooltip-wrap:focus-within .shop-tooltip {
+  opacity: 1;
+  visibility: visible;
+}
+@media (prefers-reduced-motion: reduce) {
+  .shop-tooltip {
+    transition: none;
+  }
+}
+
 @keyframes blink-caret {
   0%, 49% { opacity: 1; }
   50%, 100% { opacity: 0; }
@@ -192,7 +242,8 @@ body {
 /* Restore-action buttons (components/battle/VerseParchment.tsx's challenge
    submit button, components/battle/RestorePrompt.tsx's confirm button,
    components/battle/DebriefChoiceButtons.tsx's choice buttons) - matches
-   Tailwind's green-500, the same green as the "Good!" FeedbackBanner, so
-   every primary action button in the battle scenes reads as one color. */
-.neo-btn-restore { background-color: #22c55e; }
-.neo-btn-restore:hover { background-color: #4ade80; }
+   Tailwind's green-400, the same green used everywhere else in the battle
+   scenes (FeedbackBanner, DebriefContinueButton, RestoreBar, the post-battle
+   Debrief screen), so every green element reads as one consistent color. */
+.neo-btn-restore { background-color: #4ade80; }
+.neo-btn-restore:hover { background-color: #86efac; }

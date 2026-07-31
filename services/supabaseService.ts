@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { addLog as emitGameLog } from '../utils/gameEvents';
+import { DEFAULT_POWER_UP_COUNTS, type PowerUpType } from '../config/powerUpConfig';
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -18,6 +19,8 @@ export interface PlayerProfile {
   cucumbers: number;
   tickets: number;
   clearedIslands: string[];
+  hasHolyWater?: boolean;
+  powerUps?: Record<PowerUpType, number>;
 }
 
 export interface ProfileUpdate {
@@ -31,6 +34,8 @@ export interface ProfileUpdate {
   cucumbers?: number;
   tickets?: number;
   clearedIslands?: string[];
+  hasHolyWater?: boolean;
+  powerUps?: Record<PowerUpType, number>;
 }
 
 export const supabaseService = {
@@ -62,6 +67,8 @@ export const supabaseService = {
         cucumbers: 5,
         tickets: 1,
         clearedIslands: [],
+        hasHolyWater: false,
+        powerUps: DEFAULT_POWER_UP_COUNTS,
       };
 
       const { error: insertError } = await supabase

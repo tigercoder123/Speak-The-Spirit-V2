@@ -20,14 +20,20 @@ export interface ResponseOption {
 
 /**
  * Result shape for services/responseChoicesService.ts's `getFreshResponseChoices` -
- * the 3 tonal player lines for the CHOICE screen, plus the muted Songbeast's
- * own short thought-bubble reaction to each one (see components/battle/ThoughtBubble.tsx),
- * generated together in a single Gloo call so the matching reaction is
- * already in hand the instant the player picks a line.
+ * the 3 tonal player lines for the CHOICE screen, the muted Songbeast's own
+ * short thought-bubble reaction to each one, and the Silencer's own tone-keyed
+ * comeback line reacting to that exact line (see
+ * components/battle/ThoughtBubble.tsx and components/battle/TemptationLine.tsx),
+ * all generated together in a single Gloo call so the matching reaction/comeback
+ * is already in hand the instant the player picks a line. `rebuttals` is
+ * omitted entirely on the static fallback path (Gloo unavailable) - callers
+ * fall back to the tier-based SILENCER_BATTLE_TEMPTATION_LINES instead, same
+ * as before this existed.
  */
 export interface ResponseChoicesResult {
   options: ResponseOption[];
   reactions: Record<ResponseTone, string>;
+  rebuttals?: Record<ResponseTone, string>;
 }
 
 // Fallback shown on the CHOICE screen whenever the fresh, gear-piece-specific
@@ -70,12 +76,30 @@ export type GearPieceKey = 'headphones' | 'glasses' | 'muzzle';
 export interface GearPieceInfo {
   name: string;
   description: string;
+  /** The specific false belief the Silencer convinced the Songbeast of, which
+   * is WHY it's still wearing this piece - not just "it looks nice." Fed into
+   * generateSilencerResponseChoices (see app/actions/gloo.ts) so each of the
+   * 3 response lines dismantles THIS exact lie using the verse, instead of a
+   * generic "you don't need the gear" line. */
+  lie: string;
 }
 
 export const GEAR_PIECE_INFO: Record<GearPieceKey, GearPieceInfo> = {
-  headphones: { name: 'headphones', description: 'headphones that drown out anything true' },
-  glasses: { name: 'glasses', description: "glasses that distort what's real" },
-  muzzle: { name: 'muzzle', description: "a muzzle that silences its voice" },
+  headphones: {
+    name: 'headphones',
+    description: 'headphones that drown out anything true',
+    lie: "If I actually hear what people really think of me, it will hurt too much - so it's safer to never truly listen to anyone at all.",
+  },
+  glasses: {
+    name: 'glasses',
+    description: "glasses that distort what's real",
+    lie: "The world looks too broken and scary exactly as it is - so it's safer to see everything through a warped, distorted lens instead of clearly.",
+  },
+  muzzle: {
+    name: 'muzzle',
+    description: "a muzzle that silences its voice",
+    lie: "If I ever really use my true voice, people will judge it and turn away - so it's safer to stay silent.",
+  },
 };
 
 export const GEAR_PIECE_ORDER: GearPieceKey[] = ['headphones', 'glasses', 'muzzle'];

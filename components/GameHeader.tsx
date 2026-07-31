@@ -8,14 +8,12 @@ export default function GameHeader() {
   const {
     cupcakes,
     cucumbers,
-    tickets,
     hasHolyWater,
-    handleResetGame,
     handleLogout,
     userId,
     loginMethod,
     setCurrentScreen,
-    setPendingBattleSkipToRestored,
+    setFeedback,
   } = useGame();
 
   const [showSettings, setShowSettings] = useState(false);
@@ -45,41 +43,21 @@ export default function GameHeader() {
       {/* Replace the "Currency & Gear Inventory Panel" section with this: */}
 
 <div className="flex items-center gap-2 text-xs font-bold">
-  {/* Keeps track of progress without showing shop currency */}
-  <div className="bg-white py-0.5 px-3 border-2 border-black rounded-lg flex items-center gap-1.5 shadow-[2px_2px_0px_0px_#000]">
-    <span>🎟️ Realm Passes:</span>
-    <span className="text-indigo-600 text-xs">{tickets}</span>
-  </div>
-
   <div className="flex gap-2 ml-2">
-    <button
-      onClick={() => setCurrentScreen('BATTLE')}
-      title="Dev cheat: jump straight to the battle scene"
-      className="bg-purple-700 text-white hover:bg-purple-600 border-2 border-black px-2 py-0.5 rounded-lg font-black text-[10px] uppercase neo-btn"
-    >
-      ⚔️ Cheat: Battle
-    </button>
-    <button
-      onClick={() => {
-        setPendingBattleSkipToRestored(true);
-        setCurrentScreen('BATTLE');
-      }}
-      title="Dev cheat: jump straight to the battle scene with the Songbeast already restored"
-      className="bg-emerald-700 text-white hover:bg-emerald-600 border-2 border-black px-2 py-0.5 rounded-lg font-black text-[10px] uppercase neo-btn"
-    >
-      ⭐ Cheat: Restored
-    </button>
-    <button
-      onClick={handleResetGame}
-      className="bg-orange-500 text-white hover:bg-orange-600 border-2 border-black px-2 py-0.5 rounded-lg font-black text-[10px] uppercase neo-btn"
-    >
-      Reset
-    </button>
     <button
       onClick={handleLogout}
       className="bg-red-600 text-white hover:bg-red-700 border-2 border-black px-2 py-0.5 rounded-lg font-black text-[10px] uppercase neo-btn"
     >
       Logout
+    </button>
+    <button
+      onClick={() => {
+        setCurrentScreen('OVERWORLD');
+        setFeedback('');
+      }}
+      className="bg-cyan-600 text-white hover:bg-cyan-500 border-2 border-black px-2 py-0.5 rounded-lg font-black text-[10px] uppercase neo-btn"
+    >
+      🗺️ Return to Map
     </button>
     <button
       onClick={() => setShowSettings(true)}
