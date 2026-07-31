@@ -105,7 +105,7 @@ export async function askAngelGabriel(
         ],
         temperature: 0.7
       }),
-      signal: AbortSignal.timeout(15000)
+      signal: AbortSignal.timeout(10000)
     });
 
     if (!response.ok) {
@@ -267,6 +267,69 @@ function buildCuratedQuestion(
   return result;
 }
 
+interface NormalizedQuestion {
+  question: string;
+  optionA: string;
+  optionB: string;
+  optionC?: string;
+  correctOption: 'A' | 'B' | 'C';
+}
+
+/**
+ * 🧹 Normalizes whatever JSON the AI returned into a canonical question shape with a guaranteed-valid
+ * `correctOption`. The model frequently ignores our key names (uses correctAnswer/answer/etc.) or
+ * puts the answer TEXT instead of a letter — every consumer (answer check, hint, display) depends on
+ * `correctOption` being a real letter that points to an existing option, so we reconcile it here.
+ * Returns null if the payload can't be salvaged (caller then falls back to a curated question).
+ */
+function normalizeQuestionData(raw: unknown, optionCount: number): NormalizedQuestion | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+
+  const str = (v: unknown) => (v == null ? '' : String(v).trim());
+  const question = str(r.question ?? r.prompt);
+  const optionA = str(r.optionA ?? r.option_a ?? r.a);
+  const optionB = str(r.optionB ?? r.option_b ?? r.b);
+  const optionCVal = r.optionC ?? r.option_c ?? r.c;
+  const optionC = optionCVal != null ? str(optionCVal) : undefined;
+
+  if (!question || !optionA || !optionB) return null;
+  if (optionCount === 3 && !optionC) return null; // wanted 3 options but the model only gave 2
+
+  // Pull the correct answer from any of the keys the model tends to use.
+  const rawCorrect = str(
+    r.correctOption ?? r.correctAnswer ?? r.correct_option ?? r.answer ?? r.correct
+  );
+  if (!rawCorrect) return null;
+
+  // Resolve it to a canonical letter: a bare letter, an "Option B" string, or the answer text.
+  let letter = '';
+  const upper = rawCorrect.toUpperCase();
+  const optionMatch = upper.match(/\b(?:OPTION\s*)?([ABC])\b/);
+  if (['A', 'B', 'C'].includes(upper)) {
+    letter = upper;
+  } else if (optionMatch) {
+    letter = optionMatch[1];
+  } else {
+    const lc = rawCorrect.toLowerCase();
+    if (optionA.toLowerCase() === lc || lc.includes(optionA.toLowerCase())) letter = 'A';
+    else if (optionB.toLowerCase() === lc || lc.includes(optionB.toLowerCase())) letter = 'B';
+    else if (optionC && (optionC.toLowerCase() === lc || lc.includes(optionC.toLowerCase()))) letter = 'C';
+  }
+
+  if (!letter) return null;
+  if (letter === 'C' && !optionC) return null; // points at a non-existent option
+
+  const result: NormalizedQuestion = {
+    question,
+    optionA,
+    optionB,
+    correctOption: letter as 'A' | 'B' | 'C',
+  };
+  if (optionC) result.optionC = optionC;
+  return result;
+}
+
 /**
  * 🎲 Generates a highly personalized multiple-choice question for any concept in the game.
  */
@@ -354,7 +417,7 @@ export async function generateAdaptiveQuestion(
         ],
         temperature: 0.8
       }),
-      signal: AbortSignal.timeout(15000)
+      signal: AbortSignal.timeout(10000)
     });
 
     if (!response.ok) {
@@ -362,11 +425,24 @@ export async function generateAdaptiveQuestion(
     }
 
     const data = await response.json();
-    const rawText = data.choices[0].message.content.trim();
-    const cleanJsonText = rawText.replace(/^```json\s*|```$/g, '');
-    const parsedQuestion = JSON.parse(cleanJsonText);
+    const rawText = String(data?.choices?.[0]?.message?.content ?? '').trim();
 
-    return { questionData: parsedQuestion };
+    // Bulletproof extraction: grab from the first "{" to the last "}" so stray prose/markdown
+    // around the JSON doesn't break the parse (same approach as verifyComprehension).
+    const startIndex = rawText.indexOf('{');
+    const endIndex = rawText.lastIndexOf('}');
+    if (startIndex === -1 || endIndex === -1) {
+      throw new Error('No JSON object found in Gloo question response.');
+    }
+    const parsedQuestion = JSON.parse(rawText.substring(startIndex, endIndex + 1));
+
+    // Normalize + validate so every scene gets a guaranteed-valid correctOption.
+    const normalized = normalizeQuestionData(parsedQuestion, optionCount);
+    if (!normalized) {
+      throw new Error('Gloo question failed shape/answer-key validation.');
+    }
+
+    return { questionData: normalized };
 
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
@@ -440,7 +516,7 @@ export async function verifyComprehension(
         ],
         temperature: 0.5 
       }),
-      signal: AbortSignal.timeout(15000)
+      signal: AbortSignal.timeout(10000)
     });
 
     if (!response.ok) {

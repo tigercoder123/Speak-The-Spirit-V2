@@ -413,8 +413,9 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     loadOfflineFallback();
 
     // Demo guests have no profile/userId, so seed sensible defaults the quest scenes expect.
-    // Name already falls back to 'Traveler' in the UI; grade tunes hint difficulty (TK = easiest).
-    setGradeLevel('TK');
+    // Name already falls back to 'Traveler' in the UI. Use '4th' so the scenes take the live
+    // Gloo question-generation path (the TK/2nd-3rd branches short-circuit to hardcoded questions).
+    setGradeLevel('4th');
     // The memory verse (Hebrews 11:1) normally loads via YouVersion/Gloo, which requires a userId.
     // Preload it here so the quest riddles show real content instead of "Forging..." placeholders.
     setVerseChunks([
