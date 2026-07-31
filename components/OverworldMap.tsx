@@ -1,11 +1,106 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { useGame } from '../context/GameContext';
 import { addLog } from '../utils/gameEvents';
 
+/**
+ * OverworldMap
+ * ------------
+ * Presentational overlay for the hand-painted map.jpg background, matching
+ * the same pattern as components/BasecampShop.tsx: the art is a fixed
+ * painting, every interactive island is a % -positioned invisible hotspot
+ * anchored to it, and hovering one surfaces its subtext (the same status +
+ * description text the old card-grid map used to always show). Only Base,
+ * Faith, Love, and Hope have real behavior behind them - map.jpg also shows
+ * Joy/Patience/Peace/Kindness, but those have no feature behind them yet,
+ * so they're left as plain, non-interactive art.
+ */
+
+type IslandId = 'BASE' | 'FAITH' | 'LOVE' | 'HOPE';
+
+interface IslandRegion {
+  id: IslandId;
+  name: string;
+  // Bounding box (in % of map.jpg) covering the island's icon + label banner.
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+// Regions are tuned to map.jpg's painted island positions. If the art is
+// regenerated, nudge these %s to match the new island positions.
+const ISLAND_REGIONS: IslandRegion[] = [
+  { id: 'FAITH', name: 'Faith Island', left: 11, top: 58, width: 22, height: 35 },
+  { id: 'BASE', name: 'Basecamp Castle', left: 37, top: 58, width: 22, height: 35 },
+  { id: 'LOVE', name: 'Love Island', left: 17, top: 11, width: 19, height: 28 },
+  { id: 'HOPE', name: 'Hope Island', left: 4, top: 36, width: 20, height: 26 },
+];
+
 export default function OverworldMap() {
   const { setCurrentScreen, setFeedback, feedback, triggerShake, hasHolyWater, clearedIslands } = useGame();
+  const [hoveredIsland, setHoveredIsland] = useState<IslandId | null>(null);
+
+  const faithCleared = clearedIslands.includes('Faith Island');
+
+  const handleFaithClick = () => {
+    addLog('Traveling to Faith Island...', 'system');
+    setCurrentScreen('QUEST');
+  };
+
+  const handleBaseClick = () => {
+    addLog('Entering Basecamp Castle & Merchant Shop.', 'shop');
+    setCurrentScreen('SHOP');
+  };
+
+  const handleHopeClick = () => {
+    if (faithCleared) {
+      addLog('Traveling to Hope Island...', 'system');
+      setCurrentScreen('QUEST'); // In a real app, this would be a different screen/quest
+    } else {
+      triggerShake();
+      addLog('Tried to enter Hope Island, but it is locked in static mist.', 'system');
+      setFeedback('Hope Island is shrouded in toxic mist! Complete Faith Island first to unlock it.');
+    }
+  };
+
+  const handleLoveClick = () => {
+    if (hasHolyWater) {
+      addLog('Holy Water Spray breaks the protective Static on Love Island!', 'system');
+      setFeedback("You spray Holy Water! The barrier dissolved. (Love Island is unlocked, but wait! Let's clear Faith Island first in this demo!)");
+    } else {
+      triggerShake();
+      addLog('Tried to enter Love Island. Blocked by a Static shield.', 'system');
+      setFeedback('Love Island is guarded by a Static shield! Buy Holy Water Spray 🧪 from the Castle Shop to bypass it.');
+    }
+  };
+
+  const handlers: Record<IslandId, () => void> = {
+    FAITH: handleFaithClick,
+    BASE: handleBaseClick,
+    LOVE: handleLoveClick,
+    HOPE: handleHopeClick,
+  };
+
+  // Same subtext each island's card used to always show, keyed by id - shown
+  // now only while that island is hovered (see the info bar below the map).
+  const subtext: Record<IslandId, { status: string; description: string }> = {
+    FAITH: { status: 'ACTIVE', description: 'Location of the first riddle and captive Songbeast.' },
+    BASE: { status: 'VISITABLE', description: 'Exchange currency and buy power ups to save more songbeasts.' },
+    LOVE: {
+      status: hasHolyWater ? 'UNLOCKED' : 'SHIELDED',
+      description: 'Requires Holy Water Spray to breach static barriers.',
+    },
+    HOPE: {
+      status: faithCleared ? 'ACTIVE' : 'LOCKED',
+      description: faithCleared
+        ? 'The mist has cleared! Time to find the next Songbeast.'
+        : 'Requires Faith Island clearance.',
+    },
+  };
+
+  const hovered = hoveredIsland ? subtext[hoveredIsland] : null;
 
   return (
     <div className="flex-1 flex flex-col justify-between">
@@ -17,109 +112,44 @@ export default function OverworldMap() {
           </span>
         </div>
 
-        <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-6">
-          <button
-            onClick={() => {
-              addLog("Traveling to Faith Island...", "system");
-              setCurrentScreen('QUEST');
-            }}
-            className="bg-cyan-500 hover:bg-cyan-400 text-black p-4 rounded-xl neo-card flex flex-col justify-between text-left h-64 relative overflow-hidden"
-          >
-            <div className="absolute right-2 bottom-2 text-7xl opacity-20">🌟</div>
-            <div className="flex items-center justify-between">
-              <span className="bg-black text-white text-xs font-black px-2 py-0.5 rounded-full">ACTIVE</span>
-              <span className="text-xl">🌟</span>
-            </div>
-            <div>
-              <h3 className="font-black text-lg leading-tight">Faith Island</h3>
-              <p className="text-xs font-medium mt-1 text-black/80">Location of the first riddle and captive Songbeast.</p>
-            </div>
-          </button>
+        <div className="relative w-full max-w-4xl mx-auto aspect-[1344/768] rounded-2xl border-4 border-black shadow-[6px_6px_0px_#000] overflow-hidden select-none">
+          <img
+            src="/map.jpg"
+            alt="Overworld Map"
+            className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+          />
 
-          <button
-            onClick={() => {
-              addLog("Entering Basecamp Castle & Merchant Shop.", "shop");
-              setCurrentScreen('SHOP');
-            }}
-            className="bg-pink-400 hover:bg-pink-300 text-black p-4 rounded-xl neo-card flex flex-col justify-between text-left h-64 relative overflow-hidden"
-          >
-            <div className="absolute right-2 bottom-2 text-7xl opacity-20">🏰</div>
-            <div className="flex items-center justify-between">
-              <span className="bg-black text-white text-xs font-black px-2 py-0.5 rounded-full">VISITABLE</span>
-              <span className="text-xl">🏰</span>
-            </div>
-            <div>
-              <h3 className="font-black text-lg leading-tight">Basecamp Castle</h3>
-              <p className="text-xs font-medium mt-1 text-black/80">Buy gear like Tickets or power ups to save more songbeasts.</p>
-            </div>
-          </button>
-
-          <button
-            onClick={() => {
-              if (clearedIslands.includes('Faith Island')) {
-                addLog("Traveling to Hope Island...", "system");
-                setCurrentScreen('QUEST'); // In a real app, this would be a different screen/quest
-              } else {
-                triggerShake();
-                addLog("Tried to enter Hope Island, but it is locked in static mist.", "system");
-                setFeedback("Hope Island is shrouded in toxic mist! Complete Faith Island first to unlock it.");
-              }
-            }}
-            className={`${
-              clearedIslands.includes('Faith Island') 
-                ? 'bg-cyan-500 hover:bg-cyan-400 text-black cursor-pointer' 
-                : 'bg-slate-700 hover:bg-slate-650 text-slate-400 cursor-not-allowed border-dashed'
-            } p-4 rounded-xl neo-card flex flex-col justify-between text-left h-64 relative overflow-hidden transition-colors`}
-          >
-            <div className={`absolute right-2 bottom-2 text-7xl opacity-20 ${!clearedIslands.includes('Faith Island') && 'grayscale'}`}>
-              {clearedIslands.includes('Faith Island') ? '🌟' : '🔒'}
-            </div>
-            <div className="flex items-center justify-between">
-              <span className={`${clearedIslands.includes('Faith Island') ? 'bg-black text-white' : 'bg-slate-900 text-slate-500'} text-xs font-black px-2 py-0.5 rounded-full`}>
-                {clearedIslands.includes('Faith Island') ? 'ACTIVE' : 'LOCKED'}
-              </span>
-              <span className="text-xl">🌫️</span>
-            </div>
-            <div>
-              <h3 className={`font-black text-lg leading-tight ${clearedIslands.includes('Faith Island') ? 'text-black' : 'text-slate-300'}`}>Hope Island</h3>
-              <p className={`text-xs font-medium mt-1 ${clearedIslands.includes('Faith Island') ? 'text-black/80' : 'text-slate-400'}`}>
-                {clearedIslands.includes('Faith Island') ? 'The mist has cleared! Time to find the next Songbeast.' : 'Requires Faith Island clearance.'}
-              </p>
-            </div>
-          </button>
-
-          <button
-            onClick={() => {
-              if (hasHolyWater) {
-                addLog("Holy Water Spray breaks the protective Static on Love Island!", "system");
-                setFeedback("You spray Holy Water! The barrier dissolved. (Love Island is unlocked, but wait! Let's clear Faith Island first in this demo!)");
-              } else {
-                triggerShake();
-                addLog("Tried to enter Love Island. Blocked by a Static shield.", "system");
-                setFeedback("Love Island is guarded by a Static shield! Buy Holy Water Spray 🧪 from the Castle Shop to bypass it.");
-              }
-            }}
-            className="bg-slate-700 hover:bg-slate-650 text-slate-400 p-4 rounded-xl neo-card flex flex-col justify-between text-left h-64 relative border-dashed"
-          >
-            <div className="absolute right-2 bottom-2 text-7xl opacity-10">🛡️</div>
-            <div className="flex items-center justify-between">
-              <span className="bg-slate-900 text-slate-500 text-xs font-black px-2 py-0.5 rounded-full">
-                {hasHolyWater ? "UNLOCKED" : "SHIELDED"}
-              </span>
-              <span className="text-xl">❤️</span>
-            </div>
-            <div>
-              <h3 className="font-black text-lg leading-tight text-slate-300">Love Island</h3>
-              <p className="text-xs font-medium mt-1">Requires Holy Water Spray to breach static barriers.</p>
-            </div>
-          </button>
+          {ISLAND_REGIONS.map((region) => (
+            <button
+              key={region.id}
+              onClick={handlers[region.id]}
+              onMouseEnter={() => setHoveredIsland(region.id)}
+              onMouseLeave={() => setHoveredIsland((prev) => (prev === region.id ? null : prev))}
+              onFocus={() => setHoveredIsland(region.id)}
+              onBlur={() => setHoveredIsland((prev) => (prev === region.id ? null : prev))}
+              aria-label={region.name}
+              className={`absolute rounded-2xl transition-shadow ${
+                hoveredIsland === region.id ? 'shadow-[inset_0_0_0_4px_rgba(250,204,21,0.85)]' : ''
+              }`}
+              style={{ left: `${region.left}%`, top: `${region.top}%`, width: `${region.width}%`, height: `${region.height}%` }}
+            />
+          ))}
         </div>
       </div>
 
       <div className="bg-slate-900/60 p-3 border-2 border-slate-700 rounded-lg text-xs flex justify-between items-center mt-4">
-        <p className="text-yellow-400 font-bold">
-          💡 Hint: Go to Faith Island to start the quest, or visit Basecamp Castle to purchase gear!
-        </p>
+        {hovered ? (
+          <p className="text-yellow-400 font-bold">
+            <span className="bg-black text-white text-[10px] font-black px-2 py-0.5 rounded-full mr-2">
+              {hovered.status}
+            </span>
+            {hovered.description}
+          </p>
+        ) : (
+          <p className="text-yellow-400 font-bold">
+            💡 Hint: Go to Faith Island to start the quest, or visit Basecamp Castle to purchase gear!
+          </p>
+        )}
         {feedback && (
           <span className="text-pink-400 font-bold text-right ml-2 animate-pulse">{feedback}</span>
         )}

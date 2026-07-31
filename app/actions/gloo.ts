@@ -2,12 +2,33 @@
 
 import { supabase } from '@/services/supabaseService';
 
+// Cached across calls within the same warm server instance so repeat Gloo
+// calls (a single battle round can fire several - response choices,
+// temptation line, resilience thought, wrong-answer moment) skip the OAuth2
+// round trip entirely once a valid token is in hand, instead of paying for
+// it sequentially before every single completion request.
+let cachedAccessToken: string | null = null;
+let cachedTokenExpiresAt = 0; // epoch ms
+// Dedupes concurrent callers - e.g. submitAnswer's correct-answer path
+// fires off its response-choices and temptation-line generations back to
+// back without awaiting either - so a cold cache doesn't trigger a
+// redundant parallel token request for each of them.
+let pendingTokenRequest: Promise<string | null> | null = null;
+
 /**
  * 🔐 Exchanges Client ID and Client Secret for a temporary OAuth2 Access Token.
  */
 async function getGlooAccessToken(): Promise<string | null> {
+  const now = Date.now();
+  if (cachedAccessToken && now < cachedTokenExpiresAt) {
+    return cachedAccessToken;
+  }
+  if (pendingTokenRequest) {
+    return pendingTokenRequest;
+  }
+
   const url = "https://platform.ai.gloo.com/oauth2/token";
-  
+
   const clientId = process.env.GLOO_CLIENT_ID;
   const clientSecret = process.env.GLOO_CLIENT_SECRET;
 
@@ -29,25 +50,41 @@ async function getGlooAccessToken(): Promise<string | null> {
     "scope": "api/access"
   });
 
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: headers,
-      body: payload,
-      signal: AbortSignal.timeout(10000)
-    });
+  pendingTokenRequest = (async () => {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: headers,
+        body: payload,
+        signal: AbortSignal.timeout(10000)
+      });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Auth API responded with ${response.status}: ${errorText}`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Auth API responded with ${response.status}: ${errorText}`);
+      }
+
+      const data = await response.json();
+      const token: string | null = data.access_token || null;
+      if (token) {
+        cachedAccessToken = token;
+        // expires_in is in seconds per the OAuth2 client_credentials spec -
+        // refresh a little early so a near-expiry cached token is never
+        // handed to a caller about to use it. Falls back to a conservative
+        // 5-minute lifetime if the response omits it.
+        const expiresInSeconds = typeof data.expires_in === 'number' ? data.expires_in : 300;
+        cachedTokenExpiresAt = now + Math.max(0, expiresInSeconds - 30) * 1000;
+      }
+      return token;
+    } catch (error) {
+      console.error(`❌ Gloo Authentication Failed:`, error);
+      return null;
+    } finally {
+      pendingTokenRequest = null;
     }
+  })();
 
-    const data = await response.json();
-    return data.access_token || null;
-  } catch (error) {
-    console.error(`❌ Gloo Authentication Failed:`, error);
-    return null;
-  }
+  return pendingTokenRequest;
 }
 
 /**
@@ -559,6 +596,441 @@ export async function verifyComprehension(
 }
 
 // app/actions/gloo.ts (Append this function)
+
+/**
+ * 🗣️ Generates 3 tone-varied response lines for the Silencer battle's CHOICE
+ * screen - one each for gentle/firm/warm, all carrying the same "you don't
+ * need the Silencer's gear" message, grounded specifically in the verse the
+ * player is currently memorizing, and specific to whichever gear piece is
+ * being removed this round. Also generates, in this SAME call:
+ * 1. The muted Songbeast's own short thought-bubble reaction to each of the
+ *    3 lines, so the matching reaction is already in hand the instant the
+ *    player picks one (see components/battle/ThoughtBubble.tsx).
+ * 2. The Silencer's own tone-keyed comeback line reacting to that exact
+ *    line, used as the RESILENCE beat's temptation line once the player's
+ *    tone is known (see components/battle/TemptationLine.tsx and
+ *    hooks/useSilencerBattle.ts's selectResponse) - so the Silencer's
+ *    re-silence taunt always answers what the player actually just said,
+ *    instead of an independent, unrelated line from a second Gloo call.
+ * All in services/responseChoicesService.ts - no second Gloo call, no wait.
+ */
+export async function generateSilencerResponseChoices(
+  gearPieceName: string,
+  gearPieceDescription: string,
+  gearPieceLie: string,
+  verseReference: string,
+  verseText: string
+) {
+  try {
+    const accessToken = await getGlooAccessToken();
+    if (!accessToken) {
+      throw new Error("Could not acquire Gloo access token.");
+    }
+
+    const systemPrompt = `
+      You are a biblically-grounded creative writer for a children's Bible game called "Speak the Spirit".
+
+      In this game, God is called "the Gardener" - always use "the Gardener" instead of "God", "Lord",
+      "Jesus", or any other name/title for God, in every line you write below.
+
+      In this game, a Songbeast has been silenced by an antagonist called the Silencer, who has fitted it
+      with oppressive gear, and cannot speak. The player just answered a Bible memory challenge correctly
+      and is about to remove one piece of that gear: the ${gearPieceName} (${gearPieceDescription}).
+
+      The Songbeast isn't wearing the ${gearPieceName} just because it looks nice - it's still wearing it
+      because the Silencer convinced it of this specific lie:
+      "${gearPieceLie}"
+
+      The verse the player is memorizing this battle is ${verseReference}: "${verseText}"
+
+      Write exactly 3 short lines of dialogue the player could say to the Songbeast as they remove this
+      piece. Every line must:
+      1. Directly speak into and dismantle the SPECIFIC lie above - not a generic "you don't need the
+         gear" message. Each line should make clear why that exact lie isn't true.
+      2. Use the verse above as the reason the lie isn't true - paraphrase or echo its actual words,
+         phrases, or ideas (not just a generic biblical theme) to show specifically how it counters the
+         lie. A child should be able to tell this line came from THIS verse specifically.
+      3. Specifically reference the ${gearPieceName} being removed.
+      4. Be one short sentence, simple and age-appropriate.
+
+      The 3 lines differ in delivery tone AND in which part of the lie/verse connection they lean on, so
+      they don't just restate the same point 3 times:
+      - "gentle": gentle and encouraging
+      - "firm": firm and bold
+      - "warm": warm and affirming
+
+      For EACH of the 3 lines, also write the Songbeast's own brief, unspoken interior thought reacting
+      to hearing that EXACT line - it cannot speak, only think. Each reaction must:
+      1. React specifically to the content of its own matching line above, echoing its emotional register
+         back (not a generic reaction to the tone label alone).
+      2. Be interior and fragmentary, NOT a full spoken sentence - a stray thought, not dialogue. Ellipses
+         are fine.
+      3. Be EXTREMELY short: 3 to 6 words maximum. This is a hard requirement.
+
+      For EACH of the 3 lines, ALSO write the Silencer's own one-line comeback, spoken moments later as it
+      puts a piece of gear back onto the Songbeast, directly rebutting THAT EXACT line the player just
+      said. Each comeback must:
+      1. Directly reference or twist something specific the player's matching line just said - not a
+         generic taunt, a rebuttal to those exact words.
+      2. Try to pull the Songbeast back toward believing the lie above again (e.g. casting doubt on what
+         the player just said, or claiming it's not enough) - never anything violent, scary, or genuinely
+         frightening for a child.
+      3. Be one short sentence.
+      4. Not include quotation marks around the line itself - those are added separately.
+
+      Respond with a strict, valid JSON object and nothing else. No markdown, no code blocks, just raw JSON.
+
+      Expected JSON format:
+      {
+        "gentle": { "line": "the gentle, encouraging line", "reaction": "Songbeast's short thought reacting to it", "rebuttal": "the Silencer's comeback to this exact line" },
+        "firm": { "line": "the firm, bold line", "reaction": "Songbeast's short thought reacting to it", "rebuttal": "the Silencer's comeback to this exact line" },
+        "warm": { "line": "the warm, affirming line", "reaction": "Songbeast's short thought reacting to it", "rebuttal": "the Silencer's comeback to this exact line" }
+      }
+    `;
+
+    const url = "https://platform.ai.gloo.com/ai/v2/chat/completions";
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        auto_routing: true,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: `Generate the 3 response lines, matching Songbeast reactions, and matching Silencer comebacks for the ${gearPieceName} now.` }
+        ],
+        temperature: 0.8,
+        // The whole JSON payload is 9 short fields (3 one-sentence lines, 3
+        // three-to-six-word reactions, 3 one-sentence comebacks) - comfortably
+        // under 700 tokens even generously. Caps worst-case generation time if
+        // the model rambles, without any risk of truncating a well-formed response.
+        max_tokens: 700
+      }),
+      signal: AbortSignal.timeout(12000)
+    });
+
+    if (!response.ok) {
+      throw new Error(`Gloo completion call responded with ${response.status}`);
+    }
+
+    const data = await response.json();
+    const rawText = data.choices[0].message.content.trim();
+
+    const startIndex = rawText.indexOf('{');
+    const endIndex = rawText.lastIndexOf('}');
+    if (startIndex === -1 || endIndex === -1) {
+      throw new Error("No JSON object found in response.");
+    }
+    const parsed = JSON.parse(rawText.substring(startIndex, endIndex + 1));
+
+    if (!parsed.gentle?.line || !parsed.firm?.line || !parsed.warm?.line) {
+      throw new Error("Gloo response is missing one or more tones' lines.");
+    }
+    if (!parsed.gentle?.reaction || !parsed.firm?.reaction || !parsed.warm?.reaction) {
+      throw new Error("Gloo response is missing one or more tones' reactions.");
+    }
+    if (!parsed.gentle?.rebuttal || !parsed.firm?.rebuttal || !parsed.warm?.rebuttal) {
+      throw new Error("Gloo response is missing one or more tones' rebuttals.");
+    }
+
+    return {
+      lines: {
+        gentle: String(parsed.gentle.line),
+        firm: String(parsed.firm.line),
+        warm: String(parsed.warm.line),
+      },
+      reactions: {
+        gentle: String(parsed.gentle.reaction),
+        firm: String(parsed.firm.reaction),
+        warm: String(parsed.warm.reaction),
+      },
+      rebuttals: {
+        gentle: String(parsed.gentle.rebuttal),
+        firm: String(parsed.firm.rebuttal),
+        warm: String(parsed.warm.rebuttal),
+      },
+    };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('Error in generateSilencerResponseChoices:', message);
+    return { error: message };
+  }
+}
+
+/**
+ * 💭 Generates the muted Songbeast's brief interior thought for the
+ * re-silence beat - reacting to the Silencer's temptation line's content as
+ * its own gear goes back on, wavering back toward doubt. The Songbeast is
+ * muted, so this is never spoken aloud, only thought (see
+ * components/battle/ThoughtBubble.tsx and services/resilenceThoughtService.ts).
+ */
+export async function generateSongbeastResilenceThought(temptationLineContent: string) {
+  try {
+    const accessToken = await getGlooAccessToken();
+    if (!accessToken) {
+      throw new Error("Could not acquire Gloo access token.");
+    }
+
+    const systemPrompt = `
+      You are a biblically-grounded creative writer for a children's Bible game called "Speak the Spirit".
+
+      In this game, God is called "the Gardener" - always use "the Gardener" instead of "God", "Lord",
+      "Jesus", or any other name/title for God, if you reference God at all below.
+
+      In this game, a Songbeast has been silenced by an antagonist called the Silencer and cannot speak.
+      The Silencer just said this to the Songbeast, while putting a piece of its gear back on:
+      "${temptationLineContent}"
+
+      Write the Songbeast's own brief, unspoken interior thought in response - it cannot speak, only
+      think. The thought must:
+      1. React specifically to what the Silencer just said above, wavering back toward doubt.
+      2. Be interior and fragmentary, NOT a full spoken sentence - a stray thought, not dialogue.
+         Ellipses are fine.
+      3. Be EXTREMELY short: 3 to 6 words maximum. This is a hard requirement.
+      4. Never be violent, scary, or genuinely frightening for a child - just a quiet flicker of doubt.
+
+      Respond with a strict, valid JSON object and nothing else. No markdown, no code blocks, just raw JSON.
+
+      Expected JSON format:
+      {
+        "thought": "the Songbeast's short interior thought"
+      }
+    `;
+
+    const url = "https://platform.ai.gloo.com/ai/v2/chat/completions";
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        auto_routing: true,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: "Generate the Songbeast's interior thought now." }
+        ],
+        temperature: 0.8
+      }),
+      signal: AbortSignal.timeout(12000)
+    });
+
+    if (!response.ok) {
+      throw new Error(`Gloo completion call responded with ${response.status}`);
+    }
+
+    const data = await response.json();
+    const rawText = data.choices[0].message.content.trim();
+
+    const startIndex = rawText.indexOf('{');
+    const endIndex = rawText.lastIndexOf('}');
+    if (startIndex === -1 || endIndex === -1) {
+      throw new Error("No JSON object found in response.");
+    }
+    const parsed = JSON.parse(rawText.substring(startIndex, endIndex + 1));
+
+    if (!parsed.thought) {
+      throw new Error("Gloo response is missing the thought.");
+    }
+
+    return { thought: String(parsed.thought) };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('Error in generateSongbeastResilenceThought:', message);
+    return { error: message };
+  }
+}
+
+/**
+ * 😈 Generates the Silencer's gloating line for a WRONG-answer moment - said
+ * as it puts a piece of gear back onto the Songbeast because the player just
+ * missed a Bible memory question - together with the muted Songbeast's own
+ * brief interior thought reacting to it, wavering toward doubt. Both are
+ * generated in this single call (see services/wrongAnswerMomentService.ts
+ * and components/battle/ThoughtBubble.tsx) so the reply is already in hand
+ * the instant the setback beat needs it - no second call, no wait.
+ */
+export async function generateSilencerWrongAnswerMoment(
+  gearPieceName: string,
+  gearPieceDescription: string
+) {
+  try {
+    const accessToken = await getGlooAccessToken();
+    if (!accessToken) {
+      throw new Error("Could not acquire Gloo access token.");
+    }
+
+    const systemPrompt = `
+      You are a biblically-grounded creative writer for a children's Bible game called "Speak the Spirit".
+
+      In this game, God is called "the Gardener" - always use "the Gardener" instead of "God", "Lord",
+      "Jesus", or any other name/title for God, if you reference God at all below.
+
+      In this game, a Songbeast has been silenced by an antagonist called the Silencer and cannot speak.
+      The player just answered a Bible memory challenge WRONG, and the Silencer capitalizes on the
+      mistake by putting a piece of its gear back onto the Songbeast: the ${gearPieceName}
+      (${gearPieceDescription}).
+
+      Write exactly ONE short line of dialogue the Silencer says as it does this, gloating over the
+      player's mistake. The line must:
+      1. Specifically reference the ${gearPieceName} going back on.
+      2. Read as gloating or taunting about the wrong answer - never anything violent, scary, or
+         genuinely frightening for a child.
+      3. Be one short sentence.
+      4. Not include quotation marks around the line itself - those are added separately.
+
+      Then write the Songbeast's own brief, unspoken interior thought reacting to that exact line - it
+      cannot speak, only think. The thought must:
+      1. React specifically to what the Silencer just said above, wavering toward doubt or
+         discouragement - the miss went the Silencer's way, so this should NOT be an upbeat or
+         defiant thought.
+      2. Be interior and fragmentary, NOT a full spoken sentence - a stray thought, not dialogue.
+         Ellipses are fine.
+      3. Be EXTREMELY short: 3 to 6 words maximum. This is a hard requirement.
+
+      Respond with a strict, valid JSON object and nothing else. No markdown, no code blocks, just raw JSON.
+
+      Expected JSON format:
+      {
+        "silencerLine": "the Silencer's gloating line, without quotation marks",
+        "songbeastThought": "the Songbeast's short interior thought"
+      }
+    `;
+
+    const url = "https://platform.ai.gloo.com/ai/v2/chat/completions";
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        auto_routing: true,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: `Generate the Silencer's gloating line and the Songbeast's reply for the ${gearPieceName} now.` }
+        ],
+        temperature: 0.8
+      }),
+      signal: AbortSignal.timeout(12000)
+    });
+
+    if (!response.ok) {
+      throw new Error(`Gloo completion call responded with ${response.status}`);
+    }
+
+    const data = await response.json();
+    const rawText = data.choices[0].message.content.trim();
+
+    const startIndex = rawText.indexOf('{');
+    const endIndex = rawText.lastIndexOf('}');
+    if (startIndex === -1 || endIndex === -1) {
+      throw new Error("No JSON object found in response.");
+    }
+    const parsed = JSON.parse(rawText.substring(startIndex, endIndex + 1));
+
+    if (!parsed.silencerLine || !parsed.songbeastThought) {
+      throw new Error("Gloo response is missing the line or the thought.");
+    }
+
+    return {
+      silencerLine: String(parsed.silencerLine),
+      songbeastThought: String(parsed.songbeastThought),
+    };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('Error in generateSilencerWrongAnswerMoment:', message);
+    return { error: message };
+  }
+}
+
+/**
+ * 🔀 Generates wrong-answer options for a single verse word/token, in the
+ * player's own verse language - used for the Silencer battle's WORD_BANK and
+ * DROPDOWN challenges whenever that language isn't English, since the game's
+ * static distractor bank (config/silencerBattleRounds.ts) is English-only
+ * vocabulary and would otherwise mix English wrong answers into an
+ * otherwise-foreign-language word bank/dropdown (see
+ * services/distractorService.ts for the timeout/fallback wrapper around this).
+ */
+export async function generateWordDistractors(
+  word: string,
+  languageName: string,
+  count: number,
+  verseContext: string
+) {
+  try {
+    const accessToken = await getGlooAccessToken();
+    if (!accessToken) {
+      throw new Error("Could not acquire Gloo access token.");
+    }
+
+    const systemPrompt = `
+      You are generating wrong-answer options for a Bible memory-verse word game, entirely in ${languageName}.
+
+      The verse (already in ${languageName}) is: "${verseContext}"
+      The correct word/token from that exact verse is: "${word}"
+
+      Write exactly ${count} short, plausible-but-WRONG alternative word(s) or token(s), in ${languageName},
+      that a player might mistakenly pick instead of "${word}" for this exact spot in the verse. Each
+      wrong option must:
+      1. Be written in ${languageName}, using its own native script - never English or any other language.
+      2. Be roughly the same length/type as "${word}" (a single word or short token, not a full phrase).
+      3. Be clearly different from "${word}" and from each other.
+      4. NOT also correctly fit this exact spot - it must read as a plausible mistake, not another right answer.
+
+      Respond with a strict, valid JSON object and nothing else. No markdown, no code blocks, just raw JSON.
+
+      Expected JSON format:
+      { "distractors": ["wrong option 1", "wrong option 2"] }
+    `;
+
+    const url = "https://platform.ai.gloo.com/ai/v2/chat/completions";
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        auto_routing: true,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: `Generate ${count} wrong options for "${word}" now.` }
+        ],
+        temperature: 0.8,
+        max_tokens: 200
+      }),
+      signal: AbortSignal.timeout(10000)
+    });
+
+    if (!response.ok) {
+      throw new Error(`Gloo completion call responded with ${response.status}`);
+    }
+
+    const data = await response.json();
+    const rawText = data.choices[0].message.content.trim();
+
+    const startIndex = rawText.indexOf('{');
+    const endIndex = rawText.lastIndexOf('}');
+    if (startIndex === -1 || endIndex === -1) {
+      throw new Error("No JSON object found in response.");
+    }
+    const parsed = JSON.parse(rawText.substring(startIndex, endIndex + 1));
+
+    if (!Array.isArray(parsed.distractors) || parsed.distractors.length === 0) {
+      throw new Error("Gloo response is missing distractors.");
+    }
+
+    return { distractors: parsed.distractors.map((d: unknown) => String(d)) };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('Error in generateWordDistractors:', message);
+    return { error: message };
+  }
+}
 
 export async function chunkVerseWithGloo(verseText: string): Promise<string[]> {
   try {

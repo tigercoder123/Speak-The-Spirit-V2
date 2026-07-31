@@ -5,35 +5,22 @@ export interface ShopItem {
   cost: number;
   icon: string;
   costLabel: string;
-  stateKey: 'hasSwordOfTruth' | 'hasHolyWater' | null;
+  stateKey: 'hasHolyWater' | null;
 }
 
 export const SHOP_ITEMS: ShopItem[] = [
   {
-    id: 'TICKET',
-    name: 'Basecamp Ticket',
-    description: 'Needed to rescue freed Songbeasts.',
-    cost: 3,
-    icon: '🎟️',
-    costLabel: 'Cupcakes 🧁',
-    stateKey: null,
-  },
-  {
-    id: 'SWORD',
-    name: 'Sword of Truth',
-    description: 'Shatters Silencer barriers instantly.',
-    cost: 8,
-    icon: '⚔️',
-    costLabel: 'Cupcakes 🧁',
-    stateKey: 'hasSwordOfTruth',
-  },
-  {
     id: 'WATER',
     name: 'Holy Water Spray',
-    description: "Breaches Love Island's Static Barrier.",
-    cost: 5,
+    description: "Breaches Love Island's static barrier.",
+    cost: 6,
     icon: '🧪',
     costLabel: 'Cupcakes 🧁',
     stateKey: 'hasHolyWater',
   },
 ];
+
+// Trading Post isn't a purchasable ShopItem (no cost/icon/owned state), just
+// a standing conversion feature in the shop - kept here so its tooltip copy
+// (see components/BasecampShop.tsx) stays config-driven like everything else.
+export const TRADING_POST_DESCRIPTION = 'Trade 1 cucumber for 2 cupcakes.';
