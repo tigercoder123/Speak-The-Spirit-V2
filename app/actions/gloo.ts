@@ -190,6 +190,84 @@ export async function getPersonalizedGlooQuestion(userId: string) {
 }
 
 /**
+ * 🛟 Hand-written fallback questions so a Gloo outage/timeout during a live demo is invisible.
+ * Mirrors the exact shape the AI returns and rotates which slot holds the correct answer
+ * (based on attemptCount) so it isn't predictably always "A".
+ */
+function buildCuratedQuestion(
+  conceptName: string,
+  attemptCount: number = 0,
+  optionCount: number = 3
+) {
+  const faithBank = [
+    {
+      q: "The Gardener drew you a map to hidden treasure. What does REAL faith look like?",
+      correct: "Trusting the map and walking the path one step at a time, even when it looks tricky.",
+      wrongs: [
+        "Only memorizing what the map says, but never actually taking a step.",
+        "Waiting at the start for the treasure to magically float over to you.",
+      ],
+    },
+    {
+      q: "You come to a strong bridge over a rushing river. How do you show faith?",
+      correct: "Step onto the bridge and cross, trusting it will hold you up.",
+      wrongs: [
+        "Stand at the edge reading facts about how bridges are built all day.",
+        "Sit down and hope someone else carries you across.",
+      ],
+    },
+    {
+      q: "Faith is a lot like a chair. What do you actually DO with a chair?",
+      correct: "Sit all the way down on it, trusting it to hold your weight.",
+      wrongs: [
+        "Just look at it and describe what color and shape it is.",
+        "Walk right past it and wait for a comfier one to appear.",
+      ],
+    },
+  ];
+
+  const genericBank = [
+    {
+      q: `What is the true meaning of ${conceptName}?`,
+      correct: `Taking active steps to actually live out ${conceptName} every day.`,
+      wrongs: [
+        `Only thinking about ${conceptName} and memorizing facts about it.`,
+        `Waiting for ${conceptName} to just happen on its own without any effort.`,
+      ],
+    },
+  ];
+
+  const bank = conceptName.toLowerCase().includes("faith") ? faithBank : genericBank;
+  const picked = bank[attemptCount % bank.length];
+
+  const count = optionCount === 2 ? 2 : 3;
+  const letters = count === 3 ? ["A", "B", "C"] : ["A", "B"];
+  const correctIdx = attemptCount % count;
+  const wrongs = picked.wrongs.slice(0, count - 1);
+
+  const texts: string[] = [];
+  let w = 0;
+  for (let i = 0; i < count; i++) {
+    texts[i] = i === correctIdx ? picked.correct : wrongs[w++];
+  }
+
+  const result: {
+    question: string;
+    optionA: string;
+    optionB: string;
+    optionC?: string;
+    correctOption: string;
+  } = {
+    question: picked.q,
+    optionA: texts[0],
+    optionB: texts[1],
+    correctOption: letters[correctIdx],
+  };
+  if (count === 3) result.optionC = texts[2];
+  return result;
+}
+
+/**
  * 🎲 Generates a highly personalized multiple-choice question for any concept in the game.
  */
 export async function generateAdaptiveQuestion(
@@ -200,6 +278,8 @@ export async function generateAdaptiveQuestion(
   remedialContext: string = "",
   attemptCount: number = 0
 ) {
+  // Hoisted so the curated fallback in catch{} can match the intended option count.
+  let optionCount = 3;
   try {
     const accessToken = await getGlooAccessToken();
     if (!accessToken) {
@@ -216,7 +296,7 @@ export async function generateAdaptiveQuestion(
     const experience = profile?.church_experience || 'unknown';
 
     const isYoungerKid = /^(TK|K|kindergarten|1st|2nd|3rd)$/i.test(grade.trim());
-    const optionCount = isYoungerKid ? 2 : 3;
+    optionCount = isYoungerKid ? 2 : 3;
 
     const categories = [
       "CONCEPTUAL METAPHOR: Focus on definitions using concrete, age-appropriate everyday analogies (like chairs, bridges, backpacks, maps, or wind).",
@@ -291,15 +371,10 @@ export async function generateAdaptiveQuestion(
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     console.error('Error in generateAdaptiveQuestion:', message);
-    
-    return { 
-      questionData: {
-        question: `What is the true meaning of ${conceptName}?`,
-        optionA: `Just thinking about ${conceptName} and learning facts about it.`,
-        optionB: `Taking active steps to live out ${conceptName} in your daily life.`,
-        correctOption: "B"
-      }
-    };
+
+    // Curated fallback: a polished, concept-appropriate question that looks
+    // indistinguishable from the AI output, so a Gloo failure is invisible in-demo.
+    return { questionData: buildCuratedQuestion(conceptName, attemptCount, optionCount) };
   }
 }
 

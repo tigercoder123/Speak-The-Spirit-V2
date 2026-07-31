@@ -205,7 +205,12 @@ export default function CrossroadsScene({ onComplete }: { onComplete?: () => voi
       } finally { setIsThinking(false); }
     } else {
       try {
-        const res = await askAngelGabriel("user_123", currentQuestionText, `Child is asking about active question: "${currentQuestion?.question}". Guide them without giving the direct letter.`);
+        // Give the angel the answer key (as text) so its hint always matches the
+        // option the game is checking against — it just can't say the letter outright.
+        const q = currentQuestion;
+        const correctText = q ? (q.correctOption === 'A' ? q.optionA : q.correctOption === 'B' ? q.optionB : q.optionC) : '';
+        const optionsList = q ? `Options: A) ${q.optionA}; B) ${q.optionB}${q.optionC ? `; C) ${q.optionC}` : ''}.` : '';
+        const res = await askAngelGabriel("user_123", currentQuestionText, `The child is stuck on this multiple-choice question: "${q?.question}". ${optionsList} The correct answer is: "${correctText}". Give a warm hint that nudges them toward that correct answer, but NEVER say the letter or repeat the answer word-for-word.`);
         if (res.reply) setChatLog(prev => [...prev, { sender: 'angel', text: res.reply }]);
       } finally { setIsThinking(false); }
     }

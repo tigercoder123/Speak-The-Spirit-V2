@@ -24,6 +24,8 @@ interface GameContextType {
   userId: string | null;
   loginMethod: LoginMethod;
   handleLogout: () => void;
+  isDemo: boolean;
+  startDemo: () => void;
 
   //New: verse chunks state
   verseChunks: string[];
@@ -102,6 +104,9 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [loginMethod, setLoginMethod] = useState<LoginMethod>(null);
+  const [isDemo, setIsDemo] = useState<boolean>(false);
+  // Ref mirror of isDemo so the auth listener can read it without re-subscribing
+  const isDemoRef = React.useRef(false);
 
   const[verseChunks, setVerseChunks] = useState<string[]>([]);
   // Gameplay Progress
@@ -274,7 +279,8 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         setUserId(session.user.id);
         setLoginMethod('SUPABASE');
         fetchProfile(session.user.id);
-      } else {
+      } else if (!isDemoRef.current) {
+        // In demo mode there's intentionally no session — don't wipe state or bounce to INTRO
         cleanupAuthAndState();
       }
     });
@@ -388,6 +394,8 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
 
   // Authentication Functions
   const handleLogout = async () => {
+    isDemoRef.current = false;
+    setIsDemo(false);
     try {
       await supabase.auth.signOut();
       // cleanupAuthAndState is called automatically via onAuthStateChange
@@ -395,6 +403,28 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       console.error("Error during sign out:", err);
       cleanupAuthAndState();
     }
+  };
+
+  // Demo Mode: lets a guest jump straight into the intro video without an account
+  const startDemo = () => {
+    isDemoRef.current = true;
+    setIsDemo(true);
+    setIntroStep(0);
+    loadOfflineFallback();
+
+    // Demo guests have no profile/userId, so seed sensible defaults the quest scenes expect.
+    // Name already falls back to 'Traveler' in the UI; grade tunes hint difficulty (TK = easiest).
+    setGradeLevel('TK');
+    // The memory verse (Hebrews 11:1) normally loads via YouVersion/Gloo, which requires a userId.
+    // Preload it here so the quest riddles show real content instead of "Forging..." placeholders.
+    setVerseChunks([
+      'Now faith is confidence',
+      'in what we hope for',
+      'and assurance about what we do not see.',
+    ]);
+
+    setCurrentScreen('INTRO');
+    emitGameLog("Demo mode started. Playing the intro vision...", "system");
   };
 
   // Reset Progression State
@@ -441,6 +471,8 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         userId,
         loginMethod,
         handleLogout,
+        isDemo,
+        startDemo,
 
         //expose the chunks!
         verseChunks,

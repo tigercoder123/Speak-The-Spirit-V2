@@ -16,12 +16,13 @@ import { supabase } from '../services/supabaseService';
 import BackgroundMusic from '../components/BackgroundMusic';
 
 function GameContent() {
-  const { 
-    currentScreen, 
-    isLoggedIn, 
+  const {
+    currentScreen,
+    isLoggedIn,
+    isDemo,
     userId,
-    portalActive, 
-    isTransactionPending 
+    portalActive,
+    isTransactionPending
   } = useGame();
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
 
@@ -50,7 +51,7 @@ function GameContent() {
     }
   }, [isLoggedIn, userId, needsOnboarding]);
 
-  if (!isLoggedIn) {
+  if (!isLoggedIn && !isDemo) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
         <AuthGate />
