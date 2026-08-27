@@ -22,6 +22,8 @@ export default function SilencerBattleScene() {
     phase,
     verseError,
     verseReference,
+    zoomedOutBackground,
+    zoomedInBackground,
     explorationPlayerPosition,
     explorationPlayerFacing,
     startExplorationMove,
@@ -50,6 +52,8 @@ export default function SilencerBattleScene() {
     selectResponse,
     chosenMessage,
     gearPieces,
+    includesHandcuffs,
+    includesLegcuffs,
     restorePercent,
     temptationLine,
     showTemptationLine,
@@ -103,13 +107,6 @@ export default function SilencerBattleScene() {
   return (
     <div className="flex-1 flex flex-col justify-between">
       <div>
-        <div className="flex justify-between items-center border-b-2 border-slate-700 pb-3 mb-4">
-          <span className="text-purple-400 font-black tracking-widest uppercase text-xs">The Silencer&apos;s Battle</span>
-          <span className="bg-red-950 text-red-400 px-2.5 py-1 text-xs font-bold rounded-lg border border-red-800 animate-pulse">
-            COMBAT ACTIVE
-          </span>
-        </div>
-
         <div className="flex justify-end mb-3">
           <span className="text-[10px] font-black uppercase text-slate-400 whitespace-nowrap">
             Round {roundNumber + 1}/{totalRounds}
@@ -121,12 +118,15 @@ export default function SilencerBattleScene() {
         {phase === 'EXPLORING' && (
           <div className="relative">
             <BattleExplorationView
+              backgroundSrc={zoomedOutBackground}
               playerPosition={explorationPlayerPosition}
               playerFacing={explorationPlayerFacing}
               onStartMove={startExplorationMove}
               onStopMove={stopExplorationMove}
               showRestorePrompt={showRestorePrompt}
               onConfirmRestore={confirmRestore}
+              includesHandcuffs={includesHandcuffs}
+              includesLegcuffs={includesLegcuffs}
             />
           </div>
         )}
@@ -135,7 +135,10 @@ export default function SilencerBattleScene() {
           <BattleIntroTransition>
             <div className="relative">
               <SongbeastBattleAvatar
+                backgroundSrc={zoomedInBackground}
                 gearPieces={gearPieces}
+                includesHandcuffs={includesHandcuffs}
+                includesLegcuffs={includesLegcuffs}
                 silencerTurnRequestId={silencerTurnRequestId}
                 onSilencerTurnComplete={handleSilencerTurnComplete}
                 battleTurnRequestId={battleTurnRequestId}

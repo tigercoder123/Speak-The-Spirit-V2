@@ -64,7 +64,7 @@ export default function Debrief() {
               <p className="text-xs font-bold text-slate-700 mb-3">
                 {"Escort Barnaby to safety & collect your reward items!"}
               </p>
-              <button onClick={handleRescue} className="bg-indigo-600 hover:bg-indigo-500 text-white font-black uppercase text-sm px-6 py-3 rounded-xl neo-btn flex items-center gap-2">
+              <button onClick={handleRescue} className="neo-btn-restore text-black font-black uppercase text-sm px-6 py-3 rounded-xl neo-btn flex items-center gap-2">
                 🐰 Rescue Barnaby
               </button>
             </div>

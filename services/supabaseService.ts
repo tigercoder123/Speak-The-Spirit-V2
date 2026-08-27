@@ -13,6 +13,7 @@ export interface PlayerProfile {
   avatar_url?: string;
   language?: string;
   bible_version_id?: number;
+  bibleVerseReference?: string;
   grade_level?: string;
   church_experience?: string;
   cupcakes: number;
@@ -28,6 +29,7 @@ export interface ProfileUpdate {
   avatar_url?: string;
   language?: string;
   bible_version_id?: number;
+  bibleVerseReference?: string;
   grade_level?: string;
   church_experience?: string;
   cupcakes?: number;

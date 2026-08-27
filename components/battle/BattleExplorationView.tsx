@@ -2,19 +2,28 @@
 
 import React from 'react';
 import { BATTLE_ASSETS } from '../../config/battleAssets';
-import { EXPLORATION_PLAYER_SPRITE_SIZE } from '../../config/battleApproach';
+import {
+  BATTLE_SCENE_ASPECT_RATIO,
+  BATTLE_SCENE_MAX_WIDTH,
+  EXPLORATION_PLAYER_SPRITE_SIZE,
+} from '../../config/battleApproach';
 import type { Direction, FacingDirection, Position } from '../../hooks/usePlayerWalker';
 import SilencedSongbeastPreview from './SilencedSongbeastPreview';
 import RestorePrompt from './RestorePrompt';
 import DirectionalPad from '../DirectionalPad';
 
 interface BattleExplorationViewProps {
+  /** This battle's randomly-picked exploration background (see
+   * hooks/useSilencerBattle.ts's battleTheme / BATTLE_ASSETS.backgrounds.themes). */
+  backgroundSrc: string;
   playerPosition: Position;
   playerFacing: FacingDirection;
   onStartMove: (direction: Direction) => void;
   onStopMove: (direction: Direction) => void;
   showRestorePrompt: boolean;
   onConfirmRestore: () => void;
+  includesHandcuffs: boolean;
+  includesLegcuffs: boolean;
 }
 
 // The zoomed-out exploration view (battle.png) - the player walks up to the
@@ -25,23 +34,29 @@ interface BattleExplorationViewProps {
 // components/battle/SongbeastBattleAvatar.tsx so the swap into the
 // zoomed-in battle view (see BattleIntroTransition) doesn't jump size.
 export default function BattleExplorationView({
+  backgroundSrc,
   playerPosition,
   playerFacing,
   onStartMove,
   onStopMove,
   showRestorePrompt,
   onConfirmRestore,
+  includesHandcuffs,
+  includesLegcuffs,
 }: BattleExplorationViewProps) {
   return (
-    <div className="relative mx-auto flex h-[520px] w-full max-w-4xl flex-col overflow-hidden rounded-xl bg-gradient-to-b from-green-950 to-slate-900 text-white">
+    <div
+      className="relative mx-auto flex w-full flex-col overflow-hidden rounded-xl bg-gradient-to-b from-green-950 to-slate-900 text-white"
+      style={{ maxWidth: BATTLE_SCENE_MAX_WIDTH, aspectRatio: BATTLE_SCENE_ASPECT_RATIO }}
+    >
       <div className="relative flex-1">
         <img
-          src={BATTLE_ASSETS.backgrounds.zoomedOut}
+          src={backgroundSrc}
           alt=""
           className="pointer-events-none absolute inset-0 h-full w-full object-cover"
         />
 
-        <SilencedSongbeastPreview />
+        <SilencedSongbeastPreview includesHandcuffs={includesHandcuffs} includesLegcuffs={includesLegcuffs} />
 
         <div
           className="absolute -translate-x-1/2 -translate-y-[80%] transition-all duration-75 ease-out z-20"

@@ -4,12 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useGame } from '../context/GameContext';
 import { addLog } from '../utils/gameEvents';
 import { getVerse } from '../services/scriptureService';
-import { getFreshResponseChoices } from '../services/responseChoicesService';
+import { getFreshResponseChoices, getStaticResponseChoicesFallback } from '../services/responseChoicesService';
 import { getFreshResilenceThought } from '../services/resilenceThoughtService';
 import { getFreshWrongAnswerMoment } from '../services/wrongAnswerMomentService';
-import { getFreshDistractors } from '../services/distractorService';
+import { prefetchDistractors, getCachedDistractors } from '../services/distractorService';
 import { LANGUAGE_NAMES } from '../services/bibleVersionsService';
 import {
+  buildFallbackDistractors,
   Challenge,
   ChallengeSegment,
   ChallengeType,
@@ -19,6 +20,7 @@ import {
   tokenizeVerseWords,
 } from '../utils/challengeGenerator';
 import type { PowerUpType } from '../config/powerUpConfig';
+import { BATTLE_ASSETS } from '../config/battleAssets';
 import { usePlayerWalker } from './usePlayerWalker';
 import type { Position } from './usePlayerWalker';
 import { useSongbeastDebriefDialogue } from './useSongbeastDebriefDialogue';
@@ -32,18 +34,18 @@ import {
   SILENCED_PREVIEW_CENTER,
 } from '../config/battleApproach';
 import {
-  BATTLE_PROGRESS,
   buildRoundCurve,
   ExtraRoundCounts,
   GEAR_PIECE_INFO,
-  GEAR_PIECE_ORDER,
+  getGearPieceOrder,
+  GearPieceKey,
   NO_EXTRA_ROUNDS,
   ResponseOption,
   ResponseTone,
   SILENCER_BATTLE_CHOICE_THOUGHTS,
-  SILENCER_BATTLE_DISTRACTORS,
   SILENCER_BATTLE_FALLBACK_VERSE_TEXT,
   SILENCER_BATTLE_RESILENCE_THOUGHTS,
+  SILENCER_BATTLE_RESILENCE_THOUGHTS_ZH_HEADPHONES,
   SILENCER_BATTLE_RESPONSES,
   SILENCER_BATTLE_VERSE_REFERENCE,
   SILENCER_BATTLE_WRONG_ANSWER_LINES,
@@ -118,6 +120,22 @@ const GEAR_PIECE_COUNT = 3;
 
 const CORRECT_BANNER_HOLD_MS = 1200;
 const INCORRECT_BANNER_HOLD_MS = 1200;
+// How much longer the CHOICE screen's response-choices Gloo call gets once
+// the player actually submits a correct answer, if it hasn't resolved yet -
+// see handleCorrectAnswer. There's no cutoff at all before this point (see
+// the prefetch effect below): the fetch is allowed to run for however long
+// the player takes to solve the challenge. On its own this would shortchange
+// a very fast solve (e.g. answering in 2s would only give Gloo 2s + 3s = 5s
+// total, less than the old fixed window), so MIN_TOTAL_RESPONSE_WAIT_MS
+// below acts as a floor on top of it.
+const RESPONSE_SUBMIT_GRACE_MS = 3000;
+// The total time from when the fetch STARTED (CHALLENGE-phase-start) to
+// when handleCorrectAnswer is allowed to give up is never less than this -
+// so a fast solve still gets at least as much room as the old fixed
+// timeout did. Only matters when solving took less than this long; a
+// slower solve already exceeds it and just gets RESPONSE_SUBMIT_GRACE_MS
+// more, uncapped.
+const MIN_TOTAL_RESPONSE_WAIT_MS = 11000;
 const MISTAKE_REVIEW_HOLD_MS = 3000;
 const CHOICE_TO_RESTORATION_DELAY_MS = 700;
 const POST_SILENCER_PARCHMENT_DELAY_MS = 600;
@@ -128,11 +146,14 @@ const GEAR_LEVELS: Record<GearPieceState, number> = { ON: 2, HALF_ON: 1, REMOVED
 const LEVELS_TO_GEAR_STATE: GearPieceState[] = ['REMOVED', 'HALF_ON', 'ON'];
 
 // Both setbacks cost this same amount - always derived from
-// BATTLE_PROGRESS.correctAnswerGain via its setbackRatio, never its own
-// independently-tuned number, so retuning the gain keeps both setbacks at
-// exactly half of it automatically. See BATTLE_PROGRESS's own doc comment
-// in config/silencerBattleRounds.ts for how the gain itself is sized.
-const PROGRESS_SETBACK_AMOUNT = BATTLE_PROGRESS.correctAnswerGain * BATTLE_PROGRESS.setbackRatio;
+// roundCurve.battleProgress.correctAnswerGain via its setbackRatio, never
+// its own independently-tuned number, so retuning the gain keeps both
+// setbacks at exactly half of it automatically. See BATTLE_PROGRESS's own
+// doc comment in config/silencerBattleRounds.ts for how the gain itself is
+// sized. This used to be a module-level constant, but the gain now varies
+// per-verse (a handcuffs battle's 8-round curve has a different gain than
+// the base 6-round one), so it's computed inside the hook instead - see
+// progressSetbackAmount below.
 
 // The restore bar's progress score is a gain/loss ledger, not a simple
 // cleared-count ratio, since it moves both up (a correct answer) and down
@@ -202,13 +223,25 @@ export function useSilencerBattle() {
     triggerShake,
     bibleVersionId,
     bibleLanguage,
+    bibleVerseReference,
     pendingBattleSpawn,
     setPendingBattleSpawn,
     pendingBattleSkipToRestored,
     setPendingBattleSkipToRestored,
+    pendingBattleDebugRound,
+    setPendingBattleDebugRound,
     powerUps,
     setPowerUps,
   } = useGame();
+
+  // Settings-driven verse reference (GameContext, editable via SettingsModal) -
+  // falls back to the default battle verse until the player picks their own.
+  const activeVerseReference = bibleVerseReference || SILENCER_BATTLE_VERSE_REFERENCE;
+  // Human-readable language name fed into every Gloo prompt below (response
+  // choices, Songbeast reactions/thoughts, Silencer lines) so the whole
+  // battle's generated dialogue - not just the word-bank/dropdown distractors -
+  // comes back in the player's chosen verse language.
+  const activeLanguageName = bibleLanguage ? (LANGUAGE_NAMES[bibleLanguage] ?? bibleLanguage) : 'English';
 
   // Dev cheat (GameHeader.tsx's "Cheat: Restored" button) - captured once on
   // mount, same pattern as initialExplorationSpawnRef below, so clearing the
@@ -217,7 +250,26 @@ export function useSilencerBattle() {
   // already in its "just won" shape instead of the normal fresh-start one.
   const skipToRestoredRef = useRef(pendingBattleSkipToRestored);
 
-  const [phase, setPhaseState] = useState<BattlePhase>(() => (skipToRestoredRef.current ? 'RESTORED' : 'EXPLORING'));
+  // Dev cheat (GameHeader.tsx's "Round 5" button) - same one-shot-ref
+  // pattern as skipToRestoredRef above. When set, the EXPLORING walk-up is
+  // skipped entirely (phase seeds straight to 'LOADING', see below) and
+  // startBattle() runs immediately on mount instead of waiting for
+  // confirmRestore(); once its verse fetch resolves, it jumps roundNumber to
+  // this (1-indexed) round instead of leaving it at round 1 - see
+  // startBattle's own use of this ref for where that jump actually happens.
+  const debugRoundRef = useRef(pendingBattleDebugRound);
+
+  // Randomly picked once per mount (fresh every time the player clicks
+  // Battle) - the SAME theme's zoomedOut/zoomedIn pair is used for both the
+  // exploration view and the zoomed-in battle view below, so the scenery
+  // reads as one consistent place instead of switching mid-battle.
+  const [battleTheme] = useState(
+    () => BATTLE_ASSETS.backgrounds.themes[Math.floor(Math.random() * BATTLE_ASSETS.backgrounds.themes.length)]
+  );
+
+  const [phase, setPhaseState] = useState<BattlePhase>(() =>
+    skipToRestoredRef.current ? 'RESTORED' : debugRoundRef.current !== null ? 'LOADING' : 'EXPLORING'
+  );
   // phaseRef is updated synchronously inside this wrapper - not via a
   // separate useEffect - because @gsap/react's useGSAP runs its callbacks
   // in a useLayoutEffect, which always fires before any component's own
@@ -318,7 +370,33 @@ export function useSilencerBattle() {
   // challengeVariant changes - see currentRound's useMemo) rather than the
   // targeted gear piece key, since a rollback can revisit the same gear piece
   // across genuinely different rounds and still needs fresh lines each time.
-  const prefetchedRoundRef = useRef<SilencerBattleRoundConfig | null>(null);
+  // ALSO keyed on the language that was actually requested (not just the
+  // round) - bibleLanguage often hasn't finished loading from Supabase yet
+  // the instant round 0's CHALLENGE phase first mounts, so that round's
+  // first fetch can fire in the 'English' default before the player's real
+  // language is known; keying on round alone would then permanently skip
+  // ever re-fetching once the correct language DOES load a moment later,
+  // since currentRound itself wouldn't have changed.
+  const prefetchedRoundRef = useRef<{ round: SilencerBattleRoundConfig; language: string } | null>(null);
+  // True once the CURRENT round's response/reactions/rebuttals are actually
+  // in state - whether from a real Gloo result or a forced fallback (see
+  // handleCorrectAnswer's submit-triggered grace timer below). Reset to
+  // false every time a new fetch starts (the prefetch effect below), so
+  // handleCorrectAnswer can tell "is there already something to show, or do
+  // I need to start a grace-period countdown."
+  const responseSettledRef = useRef(false);
+  // Which gear piece the CURRENT round's response-choices call targeted -
+  // needed by handleCorrectAnswer's grace-period timer to build the correct
+  // static fallback (gear-specific, e.g. the Chinese headphones fallback) if
+  // it ever has to force one, without re-deriving gearKey from gearPieces at
+  // that later point (which may have already changed by then).
+  const responseGearKeyRef = useRef<GearPieceKey | null>(null);
+  // When the CURRENT round's response-choices fetch actually started (epoch
+  // ms) - lets handleCorrectAnswer's grace timer enforce
+  // MIN_TOTAL_RESPONSE_WAIT_MS as a floor on top of RESPONSE_SUBMIT_GRACE_MS,
+  // rather than always waiting only 3s past submit regardless of how little
+  // time the fetch has actually had so far.
+  const responseFetchStartedAtRef = useRef(0);
   // The Songbeast's thought-bubble reaction to each of the 3 tonal lines
   // above - generated in the SAME Gloo call as responseOptions (see
   // services/responseChoicesService.ts), cached here so the matching one is
@@ -419,25 +497,48 @@ export function useSilencerBattle() {
   useEffect(() => () => { timersRef.current.forEach(clearTimeout); }, []);
 
   const restorePercent = Math.round(progressScore);
-  // TOTAL_TURNS_FOR_PERFECT_RUN (6) already accounts for the Silencer's own
-  // comeback: each round's correct answer removes 2 gear levels and the
-  // Silencer restores 1 back (a net -1/round) except the final round, which
-  // skips the restore - see that constant's own comment in
-  // config/silencerBattleRounds.ts for the full 6-level breakdown. Every
-  // wrong answer, in turn, hands the Silencer one MORE (otherwise
+
+  // The round-progression curve is a function of the verse's actual text
+  // (see config/silencerBattleRounds.ts), which only arrives once the live
+  // fetch - or its offline fallback - resolves, so this is memoized per
+  // verseText rather than built at module load. Its totalTurnsForPerfectRun/
+  // battleProgress/includesHandcuffs/includesLegcuffs also vary per-verse (a
+  // verse over HANDCUFFS_WORD_THRESHOLD words gets an 8-round curve and a
+  // 4th gear piece, and over LEGCUFFS_WORD_THRESHOLD a 10-round curve and a
+  // 5th, instead of the base 6-round/3-piece one) - see that function's own
+  // comments for the derivation.
+  const roundCurve = useMemo(() => (verseText ? buildRoundCurve(verseText) : null), [verseText]);
+  // Which gear pieces THIS battle actually tracks, in order - the base 3
+  // plus 'handcuffs'/'legcuffs' when the verse qualifies. Falls back to the
+  // base-3 order before verseText/roundCurve are ready (mirrors
+  // GEAR_PIECE_COUNT's old always-3 assumption for that brief pre-fetch
+  // window).
+  const gearPieceOrder = useMemo(
+    () => getGearPieceOrder(roundCurve?.includesHandcuffs ?? false, roundCurve?.includesLegcuffs ?? false),
+    [roundCurve]
+  );
+  // See PROGRESS_SETBACK_AMOUNT's old comment above (GEAR_LEVELS block) -
+  // both setbacks cost this same amount, derived from this verse's own
+  // battleProgress rather than a fixed module constant now that the gain
+  // varies with the round curve.
+  const progressSetbackAmount = useMemo(
+    () => (roundCurve ? roundCurve.battleProgress.correctAnswerGain * roundCurve.battleProgress.setbackRatio : 0),
+    [roundCurve]
+  );
+  // TOTAL_TURNS_FOR_PERFECT_RUN (6, or 8 with handcuffs) already accounts
+  // for the Silencer's own comeback: each round's correct answer removes 2
+  // gear levels and the Silencer restores 1 back (a net -1/round) except
+  // the final round, which skips the restore - see
+  // config/silencerBattleRounds.ts's own comments for the full breakdown.
+  // Every wrong answer, in turn, hands the Silencer one MORE (otherwise
   // unbudgeted) restore via applyGearRestore in submitAnswer's incorrect
   // branch below, so it pushes this same finish point one round further
   // out - keeping "when everything finishes" in lockstep with the
   // Silencer's actual comeback total instead of a budget that assumes a
   // clean run.
-  const totalRoundsForFinish = TOTAL_TURNS_FOR_PERFECT_RUN + totalWrongAnswers;
+  const totalRoundsForFinish = (roundCurve?.totalTurnsForPerfectRun ?? TOTAL_TURNS_FOR_PERFECT_RUN) + totalWrongAnswers;
   const isFinalRound = roundNumber === totalRoundsForFinish - 1;
 
-  // The round-progression curve is a function of the verse's actual text
-  // (see config/silencerBattleRounds.ts), which only arrives once the live
-  // fetch - or its offline fallback - resolves, so this is memoized per
-  // verseText rather than built at module load.
-  const roundCurve = useMemo(() => (verseText ? buildRoundCurve(verseText) : null), [verseText]);
   const challengeVariant = roundVisitCounts[roundNumber] ?? 0;
   const currentRound = useMemo(
     () => (roundCurve ? roundCurve.getRoundConfig(roundNumber, challengeVariant, extraRounds) : null),
@@ -451,75 +552,54 @@ export function useSilencerBattle() {
     currentRoundTierRef.current = currentRound?.tier;
   }, [currentRound]);
 
-  // Gloo-generated wrong-answer options for WORD_BANK/DROPDOWN rounds,
-  // whenever the player's verse language isn't English - the static
-  // SILENCER_BATTLE_DISTRACTORS bank below is English-only vocabulary, so
-  // using it as-is for e.g. a Chinese verse would mix English wrong answers
-  // into an otherwise-foreign-language word bank/dropdown. Keyed by
+  // Gloo-generated wrong-answer options for WORD_BANK/DROPDOWN rounds, for
+  // every language including English - grounds the wrong answers in THIS
+  // verse's actual wording instead of a fixed hardcoded set. Keyed by
   // `${language}:${word.toLowerCase()}` so a repeated word across rounds (or
   // a retried variant) reuses one Gloo call instead of firing a fresh one
-  // every time. A plain ref, not state: it's read synchronously inside
-  // distractorLookup.forWord below at whatever moment `challenge` happens to
-  // compute, so filling it in later never forces THIS round's already-
-  // rendered challenge to recompute mid-interaction (which would wipe
-  // whatever the player has already dragged/typed/selected) - it just means
-  // the round after next naturally has fresh results ready, since
-  // `currentRound` (and this prefetch effect) update well before that
-  // round's own challenge is ever shown.
-  const distractorCacheRef = useRef<Map<string, string[]>>(new Map());
-  const pendingDistractorKeysRef = useRef<Set<string>>(new Set());
+  // every time. The cache itself lives in services/distractorService.ts (not
+  // a local ref), read synchronously inside distractorLookup.forWord below
+  // at whatever moment `challenge` happens to compute.
+  //
+  // There is NO upfront/whole-curve prefetch anymore - the very first round
+  // a battle needs (round 0) always uses the instant, zero-dependency
+  // buildFallbackDistractors below (there's nothing to have prefetched yet).
+  // Every round AFTER that gets its distractors prefetched by the response-
+  // choices effect further down, once THIS round's response-choices Gloo
+  // call finishes - deliberately sequenced (not concurrent) so distractor
+  // fetching and response-choices generation never compete for the same
+  // Gloo capacity at the same time. See that effect for where this actually
+  // gets kicked off.
 
-  useEffect(() => {
-    if (!currentRound || !verseText) return;
-    if (currentRound.challengeType !== 'WORD_BANK' && currentRound.challengeType !== 'DROPDOWN') return;
-    if (!bibleLanguage || bibleLanguage === 'en') return;
-
-    const languageName = LANGUAGE_NAMES[bibleLanguage] ?? bibleLanguage;
-    const words = tokenizeVerseWords(verseText);
-
-    currentRound.blankWordIndices.forEach((wordIndex) => {
-      const word = words[wordIndex]?.value;
-      if (!word) return;
-
-      const cacheKey = `${bibleLanguage}:${word.toLowerCase()}`;
-      if (distractorCacheRef.current.has(cacheKey) || pendingDistractorKeysRef.current.has(cacheKey)) return;
-      pendingDistractorKeysRef.current.add(cacheKey);
-
-      getFreshDistractors(word, languageName, 3, verseText, SILENCER_BATTLE_DISTRACTORS.forWord(word))
-        .then((distractors) => {
-          distractorCacheRef.current.set(cacheKey, distractors);
-        })
-        .finally(() => {
-          pendingDistractorKeysRef.current.delete(cacheKey);
-        });
-    });
-  }, [currentRound, verseText, bibleLanguage]);
-
-  const distractorLookup: DistractorLookup = useMemo(
-    () => ({
+  // Last-resort fallback (no cached/fresh Gloo result yet) borrows other
+  // real, significant words already present in THIS verse instead of any
+  // hardcoded vocabulary - works identically regardless of language/script,
+  // and is always instantly available (see buildFallbackDistractors).
+  const distractorLookup: DistractorLookup = useMemo(() => {
+    const words = verseText ? tokenizeVerseWords(verseText) : [];
+    return {
       forWord: (answer: string) => {
-        if (bibleLanguage && bibleLanguage !== 'en') {
-          const cached = distractorCacheRef.current.get(`${bibleLanguage}:${answer.toLowerCase()}`);
+        if (bibleLanguage) {
+          const cached = getCachedDistractors(bibleLanguage, answer);
           if (cached) return cached;
         }
-        return SILENCER_BATTLE_DISTRACTORS.forWord(answer);
+        return buildFallbackDistractors(words, answer, 3);
       },
-    }),
-    [bibleLanguage]
-  );
+    };
+  }, [bibleLanguage, verseText]);
 
   const challenge: Challenge | null = useMemo(
     () =>
       currentRound && verseText
         ? generateChallenge(
             verseText,
-            SILENCER_BATTLE_VERSE_REFERENCE,
+            activeVerseReference,
             currentRound.blankWordIndices,
             currentRound.challengeType,
             distractorLookup
           )
         : null,
-    [currentRound, verseText, distractorLookup]
+    [currentRound, verseText, distractorLookup, activeVerseReference]
   );
   // Prefers the fresh, tone-specific Silencer rebuttal resolved in
   // selectResponse below (see services/responseChoicesService.ts); falls
@@ -567,7 +647,7 @@ export function useSilencerBattle() {
       // from their onboarding choice) - omitted (undefined) falls through to
       // the /api/scripture route's own default translation if the player
       // hasn't set one yet.
-      const verse = await getVerse(SILENCER_BATTLE_VERSE_REFERENCE, bibleVersionId ?? undefined);
+      const verse = await getVerse(activeVerseReference, bibleVersionId ?? undefined);
       text = verse.text;
     } catch {
       error = 'Could not reach the Scripture archive - continuing with a saved copy of the verse.';
@@ -575,17 +655,36 @@ export function useSilencerBattle() {
 
     setVerseText(text);
     setVerseError(error);
-    setRoundNumber(0);
-    setRoundVisitCounts({ 0: 0 });
+    // Dev cheat (see debugRoundRef's own comment) - one-shot, so it only
+    // ever redirects the very first startBattle() call this mount makes.
+    if (debugRoundRef.current !== null) {
+      const targetRound = Math.max(0, debugRoundRef.current - 1);
+      setRoundNumber(targetRound);
+      setRoundVisitCounts({ [targetRound]: 0 });
+      debugRoundRef.current = null;
+    } else {
+      setRoundNumber(0);
+      setRoundVisitCounts({ 0: 0 });
+    }
     setExtraRounds(NO_EXTRA_ROUNDS);
     setWrongStreak(0);
     setTotalWrongAnswers(0);
     setWrongBlanks([]);
-    setGearPieces(Array(GEAR_PIECE_COUNT).fill('ON'));
+    // roundCurve/gearPieceOrder (the memoized ones above) are still stale
+    // here - verseText's setter above won't re-render until after this
+    // callback returns - so this battle's actual gear-piece count is worked
+    // out fresh from `text` directly, the same way roundCurve itself will be
+    // once the render catches up.
+    const freshCurve = buildRoundCurve(text);
+    const freshGearPieceOrder = getGearPieceOrder(freshCurve.includesHandcuffs, freshCurve.includesLegcuffs);
+    setGearPieces(Array(freshGearPieceOrder.length).fill('ON'));
     setProgressScore(0);
     setSelectedTone(null);
     responseGenerationIdRef.current += 1;
     prefetchedRoundRef.current = null;
+    responseSettledRef.current = false;
+    responseGearKeyRef.current = null;
+    responseFetchStartedAtRef.current = 0;
     setResponseOptions(null);
     setChoiceReactions(null);
     setChoiceRebuttals(null);
@@ -610,7 +709,7 @@ export function useSilencerBattle() {
     setCheckMessage(null);
     setShieldPopupVisible(false);
     setPhase('CHALLENGE');
-  }, [bibleVersionId]);
+  }, [bibleVersionId, activeVerseReference]);
 
   // Normally the exploration walker spawns at EXPLORATION_PLAYER_SPAWN, but
   // ChestReturnScene's left-edge transition sets pendingBattleSpawn first so
@@ -622,6 +721,15 @@ export function useSilencerBattle() {
   useEffect(() => {
     if (pendingBattleSpawn) setPendingBattleSpawn(null);
     if (pendingBattleSkipToRestored) setPendingBattleSkipToRestored(false);
+    if (pendingBattleDebugRound !== null) {
+      setPendingBattleDebugRound(null);
+      // phase already seeded to 'LOADING' above (skipping EXPLORING/INTRO
+      // entirely) - kick off the real verse fetch immediately instead of
+      // waiting for confirmRestore(), which never fires here since there's
+      // no walk-up. startBattle() itself reads debugRoundRef to land on the
+      // requested round once that fetch resolves.
+      startBattle();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -688,7 +796,33 @@ export function useSilencerBattle() {
     setGearPieces((prev) => applyGearCascade(prev, 2));
     addLog('Correct!', 'battle');
     setPhase('CORRECT');
-  }, []);
+
+    // If this round's response-choices call hasn't resolved yet, it was
+    // never cut off while the player was still solving (see the prefetch
+    // effect below) - this is the only deadline that applies, and only now
+    // that they're actually waiting on the result. Waits at least
+    // RESPONSE_SUBMIT_GRACE_MS from right now, but never lets the TOTAL time
+    // since the fetch started fall below MIN_TOTAL_RESPONSE_WAIT_MS either -
+    // otherwise a very fast solve (e.g. 2s) would only give Gloo 2s + grace,
+    // less room than the old fixed timeout ever gave it.
+    if (!responseSettledRef.current) {
+      const generationId = responseGenerationIdRef.current;
+      const elapsedSinceFetchStart = Date.now() - responseFetchStartedAtRef.current;
+      const delay = Math.max(RESPONSE_SUBMIT_GRACE_MS, MIN_TOTAL_RESPONSE_WAIT_MS - elapsedSinceFetchStart);
+      schedule(() => {
+        if (responseSettledRef.current) return; // resolved for real in the meantime
+        if (responseGenerationIdRef.current !== generationId) return; // a later round already moved on
+        const gearKey = responseGearKeyRef.current ?? gearPieceOrder[0];
+        const fallback = getStaticResponseChoicesFallback(GEAR_PIECE_INFO[gearKey], activeLanguageName);
+        setResponseOptions(fallback.options);
+        setChoiceReactions(fallback.reactions);
+        setChoiceRebuttals(fallback.rebuttals ?? null);
+        setResponsesLoading(false);
+        responseSettledRef.current = true;
+        responseGenerationIdRef.current += 1; // invalidate the still-pending original fetch
+      }, delay);
+    }
+  }, [schedule, activeLanguageName, gearPieceOrder]);
 
   const submitAnswer = useCallback(() => {
     if (phase !== 'CHALLENGE' || !challenge || wrongBlanks.length > 0) return;
@@ -730,12 +864,12 @@ export function useSilencerBattle() {
       // either line to reference.
       const wrongAnswerRestoreIndex = findGearRestoreTargetIndex(gearPieces);
       if (wrongAnswerRestoreIndex !== -1) {
-        const wrongAnswerGearKey = GEAR_PIECE_ORDER[wrongAnswerRestoreIndex];
+        const wrongAnswerGearKey = gearPieceOrder[wrongAnswerRestoreIndex];
         const fallbackLine = currentRound ? SILENCER_BATTLE_WRONG_ANSWER_LINES[currentRound.tier] : '';
         const fallbackThought = currentRound ? SILENCER_BATTLE_WRONG_ANSWER_THOUGHTS[currentRound.tier] : '';
         const wrongAnswerGenerationId = ++wrongAnswerGenerationIdRef.current;
         setFreshWrongAnswerMoment(null);
-        getFreshWrongAnswerMoment(GEAR_PIECE_INFO[wrongAnswerGearKey], fallbackLine, fallbackThought).then((moment) => {
+        getFreshWrongAnswerMoment(GEAR_PIECE_INFO[wrongAnswerGearKey], fallbackLine, fallbackThought, activeLanguageName).then((moment) => {
           if (wrongAnswerGenerationIdRef.current !== wrongAnswerGenerationId) return; // a later miss/round already started
           setFreshWrongAnswerMoment(moment);
         });
@@ -744,7 +878,7 @@ export function useSilencerBattle() {
     }
 
     handleCorrectAnswer();
-  }, [phase, challenge, answers, wrongBlanks, gearPieces, triggerShake, activePowerUps, schedule, handleCorrectAnswer]);
+  }, [phase, challenge, answers, wrongBlanks, gearPieces, triggerShake, activePowerUps, schedule, handleCorrectAnswer, activeLanguageName, gearPieceOrder]);
 
   // Only activatable while an editable challenge is actually showing - not
   // during the read-only mistake-review beat (wrongBlanks.length > 0), which
@@ -883,18 +1017,30 @@ export function useSilencerBattle() {
     // Skipped on the final round: there's no comeback to narrate,
     // finalRestoration() plays instead.
     if (!isFinalRound) {
-      const fallbackThought = currentRound ? SILENCER_BATTLE_RESILENCE_THOUGHTS[currentRound.tier] : '';
+      // Same headphones+Chinese special case as the CHOICE-beat reaction
+      // above, and for the same reason: the generic SILENCER_BATTLE_
+      // RESILENCE_THOUGHTS fallback is English and tier-keyed, so it would
+      // jarringly mix languages if this round's response-choices call
+      // (which IS already using the Chinese headphones fallback - see
+      // choiceReactionsRef above) fell through to it instead.
+      const usingZhHeadphonesFallback =
+        responseGearKeyRef.current === 'headphones' && activeLanguageName === LANGUAGE_NAMES.zh;
+      const fallbackThought = usingZhHeadphonesFallback
+        ? SILENCER_BATTLE_RESILENCE_THOUGHTS_ZH_HEADPHONES[tone]
+        : currentRound
+        ? SILENCER_BATTLE_RESILENCE_THOUGHTS[currentRound.tier]
+        : '';
       const rebuttal = choiceRebuttalsRef.current?.[tone] ?? null;
       const line = rebuttal ?? currentRound?.temptationLine ?? '';
       setFreshTemptationLine(rebuttal);
       setFreshResilenceThought(null);
       const resilenceThoughtId = ++resilenceThoughtGenerationIdRef.current;
-      getFreshResilenceThought(line, fallbackThought).then((thought) => {
+      getFreshResilenceThought(line, fallbackThought, activeLanguageName).then((thought) => {
         if (resilenceThoughtGenerationIdRef.current !== resilenceThoughtId) return; // a later round already started
         setFreshResilenceThought(thought);
       });
     }
-  }, [isFinalRound, currentRound]);
+  }, [isFinalRound, currentRound, activeLanguageName]);
 
   // Fired by the avatar the instant its removed gear item actually lands mid-
   // sequence - the chosen-response caption's (and paired thought bubble's)
@@ -926,7 +1072,7 @@ export function useSilencerBattle() {
     // round too, which is what lands the bar at exactly 100%. The re-
     // silence dip that usually follows is applied separately, in
     // handleSilencerTurnComplete, once THAT animation likewise finishes.
-    setProgressScore((prev) => clampProgress(prev + BATTLE_PROGRESS.correctAnswerGain));
+    setProgressScore((prev) => clampProgress(prev + (roundCurve?.battleProgress.correctAnswerGain ?? 0)));
     // Hush Silencer blocks the whole re-silence beat, not just this gear
     // restore - see skipReSilence/onReSilenceBlocked below, which tell the
     // avatar to skip its setback() animation entirely instead of playing it
@@ -938,7 +1084,7 @@ export function useSilencerBattle() {
       setGearPieces((prev) => applyGearRestore(prev, 1));
     }
     setPhase((prev) => (prev === 'GEAR_REMOVED' ? 'RESILENCE' : prev));
-  }, [isFinalRound, activePowerUps]);
+  }, [isFinalRound, activePowerUps, roundCurve]);
 
   // Fired by the avatar INSTEAD of ever calling setback() (see
   // skipReSilence/onReSilenceBlocked passed to SongbeastBattleAvatar), when a
@@ -1008,7 +1154,7 @@ export function useSilencerBattle() {
       // onReSilenceBlocked instead of ever playing setback() in that case
       // (see handleReSilenceBlocked above), so this whole branch only fires
       // for a real re-silence.
-      setProgressScore((prev) => clampProgress(prev - PROGRESS_SETBACK_AMOUNT));
+      setProgressScore((prev) => clampProgress(prev - progressSetbackAmount));
       setShowTemptationLine(false);
       setThoughtBubbleVisible(false);
       schedule(() => {
@@ -1030,7 +1176,7 @@ export function useSilencerBattle() {
     // as the re-silence dip above - applied now that the Silencer's isolated
     // re-silence turn has actually finished playing, not the instant the
     // wrong answer was submitted.
-    setProgressScore((prev) => clampProgress(prev - PROGRESS_SETBACK_AMOUNT));
+    setProgressScore((prev) => clampProgress(prev - progressSetbackAmount));
     setShowWrongAnswerLine(false);
     setThoughtBubbleVisible(false);
     schedule(() => {
@@ -1046,7 +1192,7 @@ export function useSilencerBattle() {
       }
       setPhase('CHALLENGE');
     }, POST_SILENCER_PARCHMENT_DELAY_MS);
-  }, [schedule, goToRound]);
+  }, [schedule, goToRound, progressSetbackAmount]);
 
   // Fired by the avatar once its (rare, full-restore) victory animation
   // finishes - the golden flash/sprite swap/Silencer fade-out has already
@@ -1090,26 +1236,58 @@ export function useSilencerBattle() {
   // battle's actual verse.
   useEffect(() => {
     if (phase !== 'CHALLENGE' || !verseText || !currentRound) return;
-    if (prefetchedRoundRef.current === currentRound) return;
-    prefetchedRoundRef.current = currentRound;
+    if (
+      prefetchedRoundRef.current?.round === currentRound &&
+      prefetchedRoundRef.current?.language === activeLanguageName
+    ) {
+      return;
+    }
+    prefetchedRoundRef.current = { round: currentRound, language: activeLanguageName };
     const targetIndex = gearPieces.findIndex((p) => p !== 'REMOVED');
-    const gearKey = GEAR_PIECE_ORDER[targetIndex === -1 ? GEAR_PIECE_ORDER.length - 1 : targetIndex];
+    const gearKey = gearPieceOrder[targetIndex === -1 ? gearPieceOrder.length - 1 : targetIndex];
+    responseGearKeyRef.current = gearKey;
+    responseSettledRef.current = false;
+    responseFetchStartedAtRef.current = Date.now();
 
     const generationId = ++responseGenerationIdRef.current;
     setResponseOptions(null);
     setChoiceReactions(null);
     setChoiceRebuttals(null);
     setResponsesLoading(true);
-    getFreshResponseChoices(GEAR_PIECE_INFO[gearKey], SILENCER_BATTLE_VERSE_REFERENCE, verseText).then(
+    const currentVerseText = verseText;
+    getFreshResponseChoices(GEAR_PIECE_INFO[gearKey], activeVerseReference, currentVerseText, activeLanguageName).then(
       ({ options, reactions, rebuttals }) => {
-        if (responseGenerationIdRef.current !== generationId) return; // a later round already started its own
-        setResponseOptions(options);
-        setChoiceReactions(reactions);
-        setChoiceRebuttals(rebuttals ?? null);
-        setResponsesLoading(false);
+        if (responseGenerationIdRef.current === generationId) {
+          setResponseOptions(options);
+          setChoiceReactions(reactions);
+          setChoiceRebuttals(rebuttals ?? null);
+          setResponsesLoading(false);
+          responseSettledRef.current = true;
+        }
+
+        // Only now that THIS round's response-choices Gloo call has
+        // actually finished (a real result, or its own internal safety-net
+        // fallback) do we start fetching the NEXT round's distractor words -
+        // deliberately sequenced rather than concurrent, so distractor
+        // fetching and response-choices generation never compete for the
+        // same Gloo capacity at the same time. Uses this round's own
+        // solve-time as the head start for the round after it; round 0 has
+        // no such head start, so it always falls through to
+        // buildFallbackDistractors instead (see distractorLookup below).
+        if (roundCurve && bibleLanguage) {
+          const nextRound = roundCurve.getRoundConfig(roundNumber + 1, 0, extraRounds);
+          if (nextRound.challengeType === 'WORD_BANK' || nextRound.challengeType === 'DROPDOWN') {
+            const nextLanguageName = LANGUAGE_NAMES[bibleLanguage] ?? bibleLanguage;
+            const words = tokenizeVerseWords(currentVerseText);
+            const neededWords = nextRound.blankWordIndices
+              .map((idx) => words[idx]?.value)
+              .filter((word): word is string => !!word);
+            prefetchDistractors(neededWords, words, bibleLanguage, nextLanguageName, currentVerseText);
+          }
+        }
       }
     );
-  }, [phase, gearPieces, verseText, currentRound]);
+  }, [phase, gearPieces, verseText, currentRound, activeVerseReference, activeLanguageName, roundCurve, roundNumber, extraRounds, bibleLanguage, gearPieceOrder]);
 
   // CORRECT -> CHOICE: timed hold, not a user action.
   useEffect(() => {
@@ -1209,7 +1387,9 @@ export function useSilencerBattle() {
   return {
     phase,
     verseError,
-    verseReference: SILENCER_BATTLE_VERSE_REFERENCE,
+    verseReference: activeVerseReference,
+    zoomedOutBackground: battleTheme.zoomedOut,
+    zoomedInBackground: battleTheme.zoomedIn,
 
     explorationPlayerPosition: exploration.position,
     explorationPlayerFacing: exploration.facing,
@@ -1244,6 +1424,14 @@ export function useSilencerBattle() {
     chosenMessage,
 
     gearPieces,
+    // Whether THIS battle's verse qualified for the 4th gear piece
+    // (handcuffs) - see config/silencerBattleRounds.ts's
+    // HANDCUFFS_WORD_THRESHOLD. The avatar components only render the
+    // handcuffs art/refs when this is true.
+    includesHandcuffs: roundCurve?.includesHandcuffs ?? false,
+    // Same, for the 5th gear piece (legcuffs) - see
+    // LEGCUFFS_WORD_THRESHOLD. Implies includesHandcuffs above.
+    includesLegcuffs: roundCurve?.includesLegcuffs ?? false,
     restorePercent,
     temptationLine,
     showTemptationLine,

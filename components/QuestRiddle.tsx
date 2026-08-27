@@ -6,35 +6,41 @@ import CrossroadsScene from './quests/Crossroads/CrossroadsScene';
 import HungerTrialScene from './quests/HungerTrial/HungerTrialScene';
 import RushingWatersScene from './quests/RushingWaters/RushingWatersScene';
 
-// Import your new services!
-import { fetchVerseFromYouVersion } from '@/services/youVersionService';
+import { getVerse } from '@/services/scriptureService';
 import { chunkVerseWithGloo } from '@/app/actions/gloo';
+import { SILENCER_BATTLE_VERSE_REFERENCE } from '@/config/silencerBattleRounds';
 
 export default function QuestRiddle() {
   // 1. Fixed: Grab 'userId', 'verseChunks', and 'setVerseChunks' from context
-  const { setCurrentScreen, setFeedback, userId, bibleVersionId, verseChunks, setVerseChunks } = useGame();
+  const { setCurrentScreen, setFeedback, userId, bibleVersionId, bibleVerseReference, verseChunks, setVerseChunks } = useGame();
 
   const [currentScene, setCurrentScene] = useState<'CROSSROADS' | 'HUNGER' | 'RIVER' | 'BATTLE_READY'>('CROSSROADS');
 
+  // Settings-driven verse reference - falls back to the default battle verse
+  // until the player picks their own (see SettingsModal.tsx).
+  const activeVerseReference = bibleVerseReference || SILENCER_BATTLE_VERSE_REFERENCE;
+
   // 2. Fetch and chunk the verse on load, and again whenever the player
-  // changes their translation/language setting mid-quest - so the fragments
-  // they're collecting always reflect their current choice.
+  // changes their translation/language/verse setting mid-quest - so the
+  // fragments they're collecting always reflect their current choice.
   useEffect(() => {
     async function loadVerse() {
       // Don't try to fetch if we don't have a user loaded yet!
       if (!userId) return;
 
-      const rawVerse = await fetchVerseFromYouVersion(userId, "HEB.11.1", bibleVersionId ?? undefined);
-      if (rawVerse) {
-        const chunks = await chunkVerseWithGloo(rawVerse);
+      try {
+        const verse = await getVerse(activeVerseReference, bibleVersionId ?? undefined);
+        const chunks = await chunkVerseWithGloo(verse.text);
         setVerseChunks(chunks);
+      } catch {
+        // getVerse already logs a game-log message on failure.
       }
     }
 
     if (userId) {
       loadVerse();
     }
-  }, [userId, bibleVersionId, setVerseChunks]);
+  }, [userId, bibleVersionId, activeVerseReference, setVerseChunks]);
 
   return (
     <div className="flex-1 flex flex-col w-full h-full">
@@ -83,7 +89,7 @@ export default function QuestRiddle() {
 
               {/* 3. NEW: Dynamically joins your chunks with a space! */}
               <p className="relative text-lg font-bold italic mb-8 text-center">
-                "Hebrews 11:1: {verseChunks.length > 0 ? verseChunks.join(' ') : 'Forging weapon...'}"
+                "{activeVerseReference}: {verseChunks.length > 0 ? verseChunks.join(' ') : 'Forging weapon...'}"
               </p>
 
               <button

@@ -1,32 +1,64 @@
 import type { Position } from '../hooks/usePlayerWalker';
 
-// The Silencer battle's own scene container is a `h-[520px] w-full
-// max-w-4xl` box (see components/battle/SongbeastBattleAvatar.tsx) - the
-// exploration view shares that SAME mount, so its walkable canvas is sized
-// to match (896x520, the container's own max width x height) rather than
-// the 800x600 convention the separate quest maps use.
-export const EXPLORATION_CANVAS_BOUNDS = { minX: 0, maxX: 896, minY: 0, maxY: 520 };
+// Uniform scale multiplier applied to every pixel-based size/position/
+// distance constant in this file, AND to the matching structural constants
+// in components/battle/SongbeastBattleAvatar.tsx (the battle-framed scene's
+// own copies of the Songbeast/player/Silencer boxes) - relative to this
+// scene's ORIGINAL design size (an 896x520 exploration canvas, with
+// character boxes sized to match). Keeps the whole battle experience's
+// proportions identical to the original design, just bigger on screen.
+// Retune this single number to rescale the whole thing (background, canvas,
+// characters, all together) without hunting down individual constants.
+export const BATTLE_SCENE_SCALE = 1.4;
 
-export const EXPLORATION_PLAYER_SPEED = 9;
+// Original (pre-scale) exploration canvas size - kept only so values below
+// read as "original x BATTLE_SCENE_SCALE" rather than opaque literals.
+const BASE_CANVAS_WIDTH = 896;
+const BASE_CANVAS_HEIGHT = 520;
+
+// The exact aspect ratio of the original 896x520 design, reused (not
+// recomputed from the scaled width/height, which would round-trip through
+// floating point) so the container never drifts off-ratio as
+// BATTLE_SCENE_SCALE changes.
+export const BATTLE_SCENE_ASPECT_RATIO = `${BASE_CANVAS_WIDTH} / ${BASE_CANVAS_HEIGHT}`;
+
+// The Silencer battle's own scene container is a `w-full
+// max-w-[BATTLE_SCENE_MAX_WIDTH] aspect-[BATTLE_SCENE_ASPECT_RATIO]` box
+// (see components/battle/SongbeastBattleAvatar.tsx and
+// components/battle/BattleExplorationView.tsx) - the exploration view
+// shares that SAME mount, so its walkable canvas is sized to match
+// (BASE_CANVAS_WIDTH/HEIGHT x BATTLE_SCENE_SCALE) rather than the 800x600
+// convention the separate quest maps use.
+export const BATTLE_SCENE_MAX_WIDTH = BASE_CANVAS_WIDTH * BATTLE_SCENE_SCALE;
+export const EXPLORATION_CANVAS_BOUNDS = {
+  minX: 0,
+  maxX: BASE_CANVAS_WIDTH * BATTLE_SCENE_SCALE,
+  minY: 0,
+  maxY: BASE_CANVAS_HEIGHT * BATTLE_SCENE_SCALE,
+};
+
+export const EXPLORATION_PLAYER_SPEED = 10;
 
 // Rendered size (px) of the player sprite on the exploration view - kept
 // here rather than hardcoded in the component so it's tunable.
-export const EXPLORATION_PLAYER_SPRITE_SIZE = 115.2;
+export const EXPLORATION_PLAYER_SPRITE_SIZE = 115.2 * BATTLE_SCENE_SCALE;
 
-// Player starts on the right, walking left toward the captive Songbeast -
+// Player starts on the left, walking right toward the captive Songbeast -
 // mirrors the battle-framed scene's own left-to-right player/Songbeast
-// arrangement (see SongbeastBattleAvatar.tsx), just reversed since here the
-// player is approaching rather than already in position.
-export const EXPLORATION_PLAYER_SPAWN: Position = { x: 760, y: 380 };
+// arrangement (see SongbeastBattleAvatar.tsx). Same x as
+// PRE_BATTLE_LEFT_EDGE_SPAWN_X below (the scene's own left edge) - kept as
+// its own literal since that constant isn't declared until after
+// EXPLORATION_CANVAS_BOUNDS further down this file.
+export const EXPLORATION_PLAYER_SPAWN: Position = { x: 200 * BATTLE_SCENE_SCALE, y: 380 * BATTLE_SCENE_SCALE };
 
 // Native box each composite is laid out in, before SILENCED_PREVIEW_PLACEMENT.scale
 // shrinks the whole group down - matches SongbeastBattleAvatar.tsx's own
-// songbeastGroupRef (h-44 w-80) and silencerGroupRef (h-72 w-52) boxes.
-// Shared here (not redeclared in the component) so both
-// components/battle/SilencedSongbeastPreview.tsx and the hook's own
-// proximity-center math stay in sync with the same numbers.
-export const SONGBEAST_BOX = { width: 320, height: 176 };
-export const SILENCER_BOX = { width: 208, height: 288 };
+// songbeastGroupRef (h-44 w-80 x BATTLE_SCENE_SCALE) and silencerGroupRef
+// (h-72 w-52 x BATTLE_SCENE_SCALE) boxes. Shared here (not redeclared in the
+// component) so both components/battle/SilencedSongbeastPreview.tsx and the
+// hook's own proximity-center math stay in sync with the same numbers.
+export const SONGBEAST_BOX = { width: 320 * BATTLE_SCENE_SCALE, height: 176 * BATTLE_SCENE_SCALE };
+export const SILENCER_BOX = { width: 208 * BATTLE_SCENE_SCALE, height: 288 * BATTLE_SCENE_SCALE };
 
 /**
  * Placement of the silenced Songbeast+Silencer preview group on the
@@ -47,7 +79,10 @@ export interface SilencedPreviewPlacement {
 }
 
 export const SILENCED_PREVIEW_PLACEMENT: SilencedPreviewPlacement = {
-  anchor: { x: 512, y: 254 },
+  anchor: { x: 512 * BATTLE_SCENE_SCALE, y: 254 * BATTLE_SCENE_SCALE },
+  // NOT multiplied by BATTLE_SCENE_SCALE - this is the composite's own ratio
+  // relative to the battle-framed size, which scales by the same factor, so
+  // the ratio between them stays correct unchanged.
   scale: 0.6,
 };
 
@@ -56,8 +91,8 @@ export const SILENCED_PREVIEW_PLACEMENT: SilencedPreviewPlacement = {
 // centering on the anchor corner reads as noticeably off from the
 // Songbeast itself once its box is large enough to matter.
 export const SILENCED_PREVIEW_CENTER: Position = {
-  x: SILENCED_PREVIEW_PLACEMENT.anchor.x - 20 + (SONGBEAST_BOX.width * SILENCED_PREVIEW_PLACEMENT.scale) / 2,
-  y: SILENCED_PREVIEW_PLACEMENT.anchor.y - 50 + (SONGBEAST_BOX.height * SILENCED_PREVIEW_PLACEMENT.scale) / 2,
+  x: SILENCED_PREVIEW_PLACEMENT.anchor.x - 20 * BATTLE_SCENE_SCALE + (SONGBEAST_BOX.width * SILENCED_PREVIEW_PLACEMENT.scale) / 2,
+  y: SILENCED_PREVIEW_PLACEMENT.anchor.y - 50 * BATTLE_SCENE_SCALE + (SONGBEAST_BOX.height * SILENCED_PREVIEW_PLACEMENT.scale) / 2,
 };
 
 // How much (px, in POST-scale/visual pixels) the Silencer's box is allowed
@@ -66,16 +101,16 @@ export const SILENCED_PREVIEW_CENTER: Position = {
 // but if they do, only by a little, and the Silencer stays behind in
 // z-order (see SilencedSongbeastPreview.tsx, which matches the same
 // Silencer-behind stacking already established in SongbeastBattleAvatar.tsx).
-export const SILENCER_OVERLAP_PX = 100;
+export const SILENCER_OVERLAP_PX = 100 * BATTLE_SCENE_SCALE;
 
 // Slight vertical nudge (px, pre-scale) so the Silencer reads as standing
 // just behind/above the Songbeast rather than perfectly level with it.
-export const SILENCER_VERTICAL_OFFSET = -9;
+export const SILENCER_VERTICAL_OFFSET = -9 * BATTLE_SCENE_SCALE;
 
 // How close (px, in EXPLORATION_CANVAS_BOUNDS space) the player must walk to
 // SILENCED_PREVIEW_CENTER before the Restore prompt appears - hidden again
 // if they walk back out past this distance.
-export const PROXIMITY_TRIGGER_DISTANCE = 130;
+export const PROXIMITY_TRIGGER_DISTANCE = 130 * BATTLE_SCENE_SCALE;
 
 export interface RestorePromptCopy {
   flavorText: string;
@@ -115,7 +150,7 @@ export const CHEST_RETURN_RIGHT_EDGE_THRESHOLD_X = CHEST_RETURN_CANVAS_BOUNDS.ma
 // wherever the player was on the chest scene's own y-axis (see
 // ChestReturnScene.tsx), clamped into EXPLORATION_CANVAS_BOUNDS by
 // usePlayerWalker itself.
-export const PRE_BATTLE_LEFT_EDGE_SPAWN_X = EXPLORATION_CANVAS_BOUNDS.minX + 80;
+export const PRE_BATTLE_LEFT_EDGE_SPAWN_X = EXPLORATION_CANVAS_BOUNDS.minX + 80 * BATTLE_SCENE_SCALE;
 
 // How long (ms) the INTRO cinematic (scale-up + cross-fade push-in from the
 // zoomed-out to the zoomed-in background, characters arriving) holds once

@@ -131,6 +131,10 @@ export default function VerseParchment({
             disabled={disabled}
             onChange={(e) => onAnswerChange(0, e.target.value)}
             rows={4}
+            autoCorrect="off"
+            autoCapitalize="off"
+            autoComplete="off"
+            spellCheck={false}
             className={`w-full border-2 rounded-lg p-3 bg-white font-bold italic text-sm leading-relaxed disabled:opacity-70 ${
               wrongBlanks.length > 0 ? 'border-red-600 text-red-700' : 'border-black'
             }`}
@@ -140,7 +144,7 @@ export default function VerseParchment({
               <p className="text-xs font-bold text-yellow-800">This hint fills in the next word.</p>
               <button
                 onClick={onConfirmWholeVerseHint}
-                className="neo-btn bg-yellow-400 hover:bg-yellow-300 text-black font-black text-xs px-4 py-1.5 rounded-lg uppercase"
+                className="neo-btn neo-btn-restore text-black font-black text-xs px-4 py-1.5 rounded-lg uppercase"
               >
                 Continue
               </button>

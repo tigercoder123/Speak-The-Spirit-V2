@@ -31,7 +31,7 @@ export default function IntroDialogue() {
           <span className="text-red-400 font-black tracking-widest uppercase text-xs">Phase 1: Cinematic Introduction</span>
           <button 
             onClick={() => {
-              setCurrentScreen('QUEST');
+              setCurrentScreen('OVERWORLD');
               addLog("Skipped introduction sequence.", "system");
             }} 
             className="bg-slate-700 text-slate-300 hover:text-white px-2.5 py-1 text-xs font-bold rounded border border-black"

@@ -619,7 +619,8 @@ export async function generateSilencerResponseChoices(
   gearPieceDescription: string,
   gearPieceLie: string,
   verseReference: string,
-  verseText: string
+  verseText: string,
+  languageName: string
 ) {
   try {
     const accessToken = await getGlooAccessToken();
@@ -630,8 +631,13 @@ export async function generateSilencerResponseChoices(
     const systemPrompt = `
       You are a biblically-grounded creative writer for a children's Bible game called "Speak the Spirit".
 
-      In this game, God is called "the Gardener" - always use "the Gardener" instead of "God", "Lord",
-      "Jesus", or any other name/title for God, in every line you write below.
+      Write everything below - all 3 lines, the Songbeast's reactions, and the Silencer's comebacks -
+      entirely in ${languageName}, using its own native script (never English, unless ${languageName} is
+      English itself).
+
+      In this game, God is called "the Gardener" - always use "the Gardener" (translated into
+      ${languageName}) instead of "God", "Lord", "Jesus", or any other name/title for God, in every line
+      you write below.
 
       In this game, a Songbeast has been silenced by an antagonist called the Silencer, who has fitted it
       with oppressive gear, and cannot speak. The player just answered a Bible memory challenge correctly
@@ -699,7 +705,7 @@ export async function generateSilencerResponseChoices(
         auto_routing: true,
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: `Generate the 3 response lines, matching Songbeast reactions, and matching Silencer comebacks for the ${gearPieceName} now.` }
+          { role: "user", content: `Generate the 3 response lines, matching Songbeast reactions, and matching Silencer comebacks for the ${gearPieceName} now, entirely in ${languageName}.` }
         ],
         temperature: 0.8,
         // The whole JSON payload is 9 short fields (3 one-sentence lines, 3
@@ -708,7 +714,14 @@ export async function generateSilencerResponseChoices(
         // the model rambles, without any risk of truncating a well-formed response.
         max_tokens: 700
       }),
-      signal: AbortSignal.timeout(12000)
+      // A generous worst-case backstop (not a UX-tuning knob) - the actual
+      // "give up and use the fallback" decision now lives in
+      // hooks/useSilencerBattle.ts, tied to the player submitting a correct
+      // answer rather than a fixed clock from when this fetch started, so
+      // this just needs to be long enough to never cut off a genuinely
+      // still-in-progress response. Matches responseChoicesService.ts's own
+      // outer safety net.
+      signal: AbortSignal.timeout(60000)
     });
 
     if (!response.ok) {
@@ -766,7 +779,7 @@ export async function generateSilencerResponseChoices(
  * muted, so this is never spoken aloud, only thought (see
  * components/battle/ThoughtBubble.tsx and services/resilenceThoughtService.ts).
  */
-export async function generateSongbeastResilenceThought(temptationLineContent: string) {
+export async function generateSongbeastResilenceThought(temptationLineContent: string, languageName: string) {
   try {
     const accessToken = await getGlooAccessToken();
     if (!accessToken) {
@@ -776,8 +789,12 @@ export async function generateSongbeastResilenceThought(temptationLineContent: s
     const systemPrompt = `
       You are a biblically-grounded creative writer for a children's Bible game called "Speak the Spirit".
 
-      In this game, God is called "the Gardener" - always use "the Gardener" instead of "God", "Lord",
-      "Jesus", or any other name/title for God, if you reference God at all below.
+      Write the thought below entirely in ${languageName}, using its own native script (never English,
+      unless ${languageName} is English itself).
+
+      In this game, God is called "the Gardener" - always use "the Gardener" (translated into
+      ${languageName}) instead of "God", "Lord", "Jesus", or any other name/title for God, if you
+      reference God at all below.
 
       In this game, a Songbeast has been silenced by an antagonist called the Silencer and cannot speak.
       The Silencer just said this to the Songbeast, while putting a piece of its gear back on:
@@ -810,7 +827,7 @@ export async function generateSongbeastResilenceThought(temptationLineContent: s
         auto_routing: true,
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: "Generate the Songbeast's interior thought now." }
+          { role: "user", content: `Generate the Songbeast's interior thought now, entirely in ${languageName}.` }
         ],
         temperature: 0.8
       }),
@@ -854,7 +871,8 @@ export async function generateSongbeastResilenceThought(temptationLineContent: s
  */
 export async function generateSilencerWrongAnswerMoment(
   gearPieceName: string,
-  gearPieceDescription: string
+  gearPieceDescription: string,
+  languageName: string
 ) {
   try {
     const accessToken = await getGlooAccessToken();
@@ -865,8 +883,12 @@ export async function generateSilencerWrongAnswerMoment(
     const systemPrompt = `
       You are a biblically-grounded creative writer for a children's Bible game called "Speak the Spirit".
 
-      In this game, God is called "the Gardener" - always use "the Gardener" instead of "God", "Lord",
-      "Jesus", or any other name/title for God, if you reference God at all below.
+      Write the line and the thought below entirely in ${languageName}, using its own native script
+      (never English, unless ${languageName} is English itself).
+
+      In this game, God is called "the Gardener" - always use "the Gardener" (translated into
+      ${languageName}) instead of "God", "Lord", "Jesus", or any other name/title for God, if you
+      reference God at all below.
 
       In this game, a Songbeast has been silenced by an antagonist called the Silencer and cannot speak.
       The player just answered a Bible memory challenge WRONG, and the Silencer capitalizes on the
@@ -910,7 +932,7 @@ export async function generateSilencerWrongAnswerMoment(
         auto_routing: true,
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: `Generate the Silencer's gloating line and the Songbeast's reply for the ${gearPieceName} now.` }
+          { role: "user", content: `Generate the Silencer's gloating line and the Songbeast's reply for the ${gearPieceName} now, entirely in ${languageName}.` }
         ],
         temperature: 0.8
       }),
@@ -976,7 +998,8 @@ export async function generateWordDistractors(
       Write exactly ${count} short, plausible-but-WRONG alternative word(s) or token(s), in ${languageName},
       that a player might mistakenly pick instead of "${word}" for this exact spot in the verse. Each
       wrong option must:
-      1. Be written in ${languageName}, using its own native script - never English or any other language.
+      1. Be written in ${languageName}, using its own native script (never a different language than
+         ${languageName} - unless ${languageName} is English itself, in which case just write in English).
       2. Be roughly the same length/type as "${word}" (a single word or short token, not a full phrase).
       3. Be clearly different from "${word}" and from each other.
       4. NOT also correctly fit this exact spot - it must read as a plausible mistake, not another right answer.

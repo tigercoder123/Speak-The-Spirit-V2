@@ -58,10 +58,12 @@ export function tokenizeVerseWords(text: string): WordToken[] {
   return tokens;
 }
 
-/** A word worth blanking when no more specific pick applies: long enough to
- * be meaningful and not a common connective. Exported so the round config's
- * fallback word-selection (when a translation doesn't contain one of its
- * themed "important" words) can reuse the same bar. */
+/** A word worth blanking: long enough to be meaningful and not a common
+ * connective. Exported so the round config's important-word selection (see
+ * config/silencerBattleRounds.ts's buildRoundCurve) and this file's own
+ * buildFallbackDistractors below share the same bar - language-agnostic, so
+ * it works the same for every verse/translation instead of relying on a
+ * hardcoded, verse-specific vocabulary list. */
 export function isSignificantWord(word: string): boolean {
   // A single Han ideograph (Chinese, Kanji) already carries independent
   // meaning, unlike a single Latin letter - the length>=4 bar below is tuned
@@ -73,6 +75,43 @@ export function isSignificantWord(word: string): boolean {
 
 function shuffle<T>(items: T[]): T[] {
   return [...items].sort(() => Math.random() - 0.5);
+}
+
+/**
+ * Builds plausible-but-wrong distractor options for `answer` by borrowing
+ * OTHER significant words already present in the SAME verse - works
+ * identically regardless of language/script, needs no hardcoded vocabulary
+ * or translation, and is always instantly available (no network call). Used
+ * as the last-resort fallback (see services/distractorService.ts and
+ * hooks/useSilencerBattle.ts) whenever a fresh Gloo-generated distractor
+ * isn't ready in time, now that WORD_BANK/DROPDOWN distractors are
+ * Gloo-generated for every language, including English.
+ *
+ * Prefers other SIGNIFICANT words first (closer in "weight" to a real
+ * answer than a stray "the"/"and"), padding with any other word in the
+ * verse if there simply aren't enough significant ones (a very short verse) -
+ * returns fewer than `count` rather than erroring if the verse still can't
+ * supply enough distinct options.
+ */
+export function buildFallbackDistractors(words: WordToken[], answer: string, count: number): string[] {
+  const answerLower = answer.toLowerCase();
+  const seen = new Set<string>([answerLower]);
+
+  const uniqueOtherWords = (predicate: (value: string) => boolean): string[] =>
+    words
+      .map((w) => w.value)
+      .filter((value) => {
+        const lower = value.toLowerCase();
+        if (seen.has(lower) || !predicate(value)) return false;
+        seen.add(lower);
+        return true;
+      });
+
+  const significantOthers = shuffle(uniqueOtherWords(isSignificantWord));
+  if (significantOthers.length >= count) return significantOthers.slice(0, count);
+
+  const anyOthers = shuffle(uniqueOtherWords(() => true));
+  return [...significantOthers, ...anyOthers].slice(0, count);
 }
 
 /** Looks up plausible wrong options for a blanked word. Implemented by the
@@ -184,14 +223,27 @@ export interface ValidationResult {
   wrongBlankIndices: number[];
 }
 
+/** Canonicalizes quote/apostrophe/dash variants to their plain ASCII form
+ * before comparing - browser/OS autocorrect on a typed textarea silently
+ * swaps straight quotes/hyphens for curly/typographic ones (and the source
+ * verse text from YouVersion may already contain the typographic form), so
+ * without this a typed answer can look byte-for-byte identical on screen to
+ * a pasted one yet fail the match. */
 function normalizeAnswer(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, ' ');
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[‘’‚‛]/g, "'")
+    .replace(/[“”„‟]/g, '"')
+    .replace(/[–—]/g, '-')
+    .replace(/\s+/g, ' ');
 }
 
 /** Exact-match-after-normalize: trim, lowercase, collapse whitespace runs (a
  * whole-verse textarea can pick up stray newlines/double spaces that
- * shouldn't fail the match) - no fuzzy typo tolerance. Punctuation is
- * deliberately left untouched: for WHOLE_VERSE challenges it must match exactly. */
+ * shouldn't fail the match), and canonicalize quote/dash variants - no fuzzy
+ * typo tolerance. Punctuation is otherwise deliberately left untouched: for
+ * WHOLE_VERSE challenges it must match exactly. */
 export function checkAnswers(challenge: Challenge, answers: string[]): ValidationResult {
   const blanks = challenge.segments.filter(
     (s): s is Extract<ChallengeSegment, { kind: 'blank' }> => s.kind === 'blank'

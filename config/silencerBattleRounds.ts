@@ -1,4 +1,4 @@
-import type { ChallengeType, DistractorLookup } from '../utils/challengeGenerator';
+import type { ChallengeType } from '../utils/challengeGenerator';
 import { isSignificantWord, tokenizeVerseWords } from '../utils/challengeGenerator';
 
 export const SILENCER_BATTLE_VERSE_REFERENCE = 'Hebrews 11:1';
@@ -68,10 +68,77 @@ export const SILENCER_BATTLE_CHOICE_THOUGHTS: Record<ResponseTone, string> = {
   warm: 'Loved, just as I am?',
 };
 
+// Simplified-Chinese fallback for the CHOICE screen, used specifically when
+// the round targets the headphones AND the player's verse language is
+// Chinese, whenever the fresh Gloo call isn't ready in time (see
+// services/responseChoicesService.ts) - the headphones round is the very
+// first correct answer of a battle, so it's the one most likely to still be
+// mid-generation when a wrong-language/no-fallback timeout would otherwise
+// show. Unlike the generic English fallback above, these dismantle
+// headphones' own specific lie (GEAR_PIECE_INFO.headphones.lie - "if I
+// actually hear what people really think of me, it will hurt too much, so
+// it's safer to never truly listen") rather than a generic "you don't need
+// the gear" line, and are written directly in Chinese rather than reusing
+// the English fallback (which would jarringly mix languages).
+export const SILENCER_BATTLE_RESPONSES_ZH_HEADPHONES: ResponseOption[] = [
+  {
+    tone: 'gentle',
+    label: '温柔而鼓励',
+    message: '你不需要那副耳机了。听见真话也许会痛,但你值得被人真心以待。',
+  },
+  {
+    tone: 'firm',
+    label: '坚定而勇敢',
+    message: '摘下耳机吧——你不必再害怕听见真相,你比自己以为的更坚强。',
+  },
+  {
+    tone: 'warm',
+    label: '温暖而肯定',
+    message: '亲爱的,你可以放心地去听。真正爱你的人,说的话不会伤害你。',
+  },
+];
+
+export const SILENCER_BATTLE_CHOICE_THOUGHTS_ZH_HEADPHONES: Record<ResponseTone, string> = {
+  gentle: '也许...我值得被听见?',
+  firm: '摘下耳机...真的可以吗?',
+  warm: '有人...真心爱我吗?',
+};
+
+// The Silencer's RESILENCE-beat comeback (see SILENCER_BATTLE_TEMPTATION_LINES
+// below, its generic tier-based counterpart) as it puts the headphones back
+// on - one per tone, each directly rebutting/twisting that exact
+// SILENCER_BATTLE_RESPONSES_ZH_HEADPHONES line rather than a generic taunt,
+// trying to pull the Songbeast back toward headphones' own lie (it's safer
+// to never truly listen). Slots into ResponseChoicesResult.rebuttals the
+// same way the fresh Gloo path's rebuttals do (see
+// services/responseChoicesService.ts's getStaticResponseChoicesFallback),
+// so hooks/useSilencerBattle.ts's selectResponse picks these up with no
+// extra plumbing - it already prefers choiceRebuttalsRef over the generic
+// tier-based temptation line whenever a rebuttal is present.
+export const SILENCER_BATTLE_REBUTTALS_ZH_HEADPHONES: Record<ResponseTone, string> = {
+  gentle: '"别傻了,真话才是最伤人的东西——戴上耳机,谁也伤不了你。"',
+  firm: '"坚强?等真相扑面而来的时候,你就知道自己有多脆弱了。"',
+  warm: '"爱?哼,等他们说出真心话,你就会发现那些话有多锋利。"',
+};
+
+// The Songbeast's RESILENCE-beat thought bubble (see
+// SILENCER_BATTLE_RESILENCE_THOUGHTS below, its generic tier-based
+// counterpart), reacting to the matching SILENCER_BATTLE_REBUTTALS_ZH_HEADPHONES
+// line above as that gear goes back on - tone-keyed to match whichever
+// rebuttal it's wavering in response to, the same way
+// SILENCER_BATTLE_CHOICE_THOUGHTS_ZH_HEADPHONES matches the CHOICE-beat line.
+export const SILENCER_BATTLE_RESILENCE_THOUGHTS_ZH_HEADPHONES: Record<ResponseTone, string> = {
+  gentle: '也许...戴上比较安全?',
+  firm: '我真的...足够坚强吗?',
+  warm: '那些话...会伤人吗?',
+};
+
 // Index order matches GearPieceState[] from useSilencerBattle (headphones,
-// glasses, muzzle) - used to tell the fresh-response generator which piece is
-// being removed this round, so its lines can reference it specifically.
-export type GearPieceKey = 'headphones' | 'glasses' | 'muzzle';
+// glasses, muzzle, plus handcuffs and legcuffs when the battle includes them
+// - see getGearPieceOrder below) - used to tell the fresh-response generator
+// which piece is being removed this round, so its lines can reference it
+// specifically.
+export type GearPieceKey = 'headphones' | 'glasses' | 'muzzle' | 'handcuffs' | 'legcuffs';
 
 export interface GearPieceInfo {
   name: string;
@@ -100,9 +167,50 @@ export const GEAR_PIECE_INFO: Record<GearPieceKey, GearPieceInfo> = {
     description: "a muzzle that silences its voice",
     lie: "If I ever really use my true voice, people will judge it and turn away - so it's safer to stay silent.",
   },
+  handcuffs: {
+    name: 'handcuffs',
+    description: 'handcuffs that keep its hands from ever being used',
+    lie: "If I actually use my hands to act for God, I might get it wrong or it won't be enough - so it's safer to never act at all.",
+  },
+  legcuffs: {
+    name: 'legcuffs',
+    description: "legcuffs that keep it from ever stepping out to where it's needed",
+    lie: "If I actually go where God is sending me, it won't be safe, I won't belong there, and it will be too much to face - so it's safer to stay right where I am.",
+  },
 };
 
+// The base 3 pieces every battle tracks. Only 3 (not 4) so short verses -
+// the common case - keep the original 6-round battle unchanged; see
+// getGearPieceOrder below for when 'handcuffs' joins this order.
 export const GEAR_PIECE_ORDER: GearPieceKey[] = ['headphones', 'glasses', 'muzzle'];
+
+// Verses longer than this many words also get a 4th gear piece, handcuffs -
+// see buildRoundCurve's `includesHandcuffs` below, which is what actually
+// decides this per-verse (this constant is just the threshold it compares
+// against).
+export const HANDCUFFS_WORD_THRESHOLD = 20;
+
+// Verses longer than this many words also get a 5th gear piece, legcuffs -
+// this threshold is nested above HANDCUFFS_WORD_THRESHOLD, so any verse
+// long enough for legcuffs is automatically long enough for handcuffs too.
+// See buildRoundCurve's `includesLegcuffs` below.
+export const LEGCUFFS_WORD_THRESHOLD = 38;
+
+/** The gear pieces THIS battle tracks, in order - the base 3, plus
+ * 'handcuffs' and 'legcuffs' appended as the verse qualifies for each (see
+ * HANDCUFFS_WORD_THRESHOLD/LEGCUFFS_WORD_THRESHOLD and buildRoundCurve's
+ * `includesHandcuffs`/`includesLegcuffs`). Callers (hooks/useSilencerBattle.ts)
+ * use this instead of the bare GEAR_PIECE_ORDER wherever they need to know
+ * how many pieces or which ones this specific battle has. `includesLegcuffs`
+ * implies `includesHandcuffs` given the nested thresholds, but this builds
+ * the order defensively (legcuffs never appended without handcuffs) rather
+ * than assuming callers always pass consistent flags. */
+export function getGearPieceOrder(includesHandcuffs: boolean, includesLegcuffs: boolean): GearPieceKey[] {
+  const order: GearPieceKey[] = [...GEAR_PIECE_ORDER];
+  if (includesHandcuffs || includesLegcuffs) order.push('handcuffs');
+  if (includesLegcuffs) order.push('legcuffs');
+  return order;
+}
 
 export type RoundTier = 'wordBank' | 'dropdown' | 'fillInBlank' | 'fullRecall' | 'wholeVerse';
 
@@ -168,45 +276,6 @@ export const SILENCER_BATTLE_WRONG_ANSWER_THOUGHTS: Record<RoundTier, string> = 
   wholeVerse: '...so close, yet not.',
 };
 
-// Thematic words likely to appear across common English translations of this
-// verse (KJV, BSB, NIV, etc. each phrase it differently) - used to pick
-// "important" word-bank/dropdown blanks when the live-fetched translation
-// actually contains them, with a plain significant-word fallback below for
-// whichever ones it doesn't. Keeps the round curve translation-agnostic
-// instead of assuming one specific wording.
-const CANDIDATE_IMPORTANT_WORDS = [
-  'faith', 'confidence', 'assurance', 'substance', 'evidence', 'conviction',
-  'hope', 'hoped', 'see', 'seen', 'unseen',
-];
-
-const DISTRACTOR_BANK: Record<string, string[]> = {
-  faith: ['doubt', 'belief', 'religion'],
-  confidence: ['worry', 'belief', 'doubt'],
-  assurance: ['doubt', 'worry', 'proof'],
-  substance: ['illusion', 'shadow', 'proof'],
-  evidence: ['proof', 'illusion', 'shadow'],
-  conviction: ['doubt', 'denial', 'hesitation'],
-  hope: ['wish', 'desire', 'fear'],
-  hoped: ['wished', 'desired', 'feared'],
-  see: ['hear', 'know', 'feel'],
-  seen: ['hidden', 'known', 'felt'],
-  unseen: ['visible', 'known', 'plain'],
-};
-
-// Plausible wrong options for any other significant word the fallback picks
-// (i.e. one not in DISTRACTOR_BANK above, because the live translation didn't
-// contain enough of the themed CANDIDATE_IMPORTANT_WORDS).
-const FALLBACK_DISTRACTOR_POOL = [
-  'doubt', 'fear', 'sight', 'proof', 'illusion', 'silence', 'noise', 'shadow', 'comfort', 'riches',
-];
-
-export const SILENCER_BATTLE_DISTRACTORS: DistractorLookup = {
-  forWord: (answer) => {
-    const key = answer.toLowerCase();
-    return DISTRACTOR_BANK[key] ?? FALLBACK_DISTRACTOR_POOL.filter((w) => w !== key);
-  },
-};
-
 // Every wrong answer restores 1 gear level via the Silencer's re-silence
 // regardless of which round it happened on - an "untracked" restore the
 // curve's turn budget never accounts for. To keep the battle's actual ending
@@ -245,10 +314,23 @@ export interface SilencerBattleRoundConfig {
 // down to exactly 2 remaining, and a 6th, final round's cascade removes
 // those last 2 with nothing left for the Silencer to restore.
 const WORD_BANK_ROUND_COUNT = 2;
-const WORD_BANK_START_COUNT = 1;
+const WORD_BANK_START_COUNT = 2;
 const DROPDOWN_ROUND_COUNT = 1;
-const DROPDOWN_START_COUNT = 4;
+const DROPDOWN_START_COUNT = 5;
 export const TOTAL_TURNS_FOR_PERFECT_RUN = 6;
+// A verse over HANDCUFFS_WORD_THRESHOLD words gets a 4th gear piece
+// (handcuffs) and 2 more fill-in-blank rounds to go with it - the growth
+// formula below (`TOTAL_TURNS_FOR_PERFECT_RUN - WORD_BANK_ROUND_COUNT -
+// DROPDOWN_ROUND_COUNT - 2`) already turns this single extra total into
+// exactly the desired 8-round curve (2 word-bank + 1 dropdown + 3 growing
+// fill-in-blank + 1 full-recall + 1 whole-verse) with no other changes.
+export const TOTAL_TURNS_WITH_HANDCUFFS = 8;
+// A verse over LEGCUFFS_WORD_THRESHOLD words gets a 5th gear piece
+// (legcuffs) on top of handcuffs, and 2 more fill-in-blank rounds beyond
+// the 8-round handcuffs curve - same growth formula as handcuffs above, just
+// one more total turn increment (4 pieces x 2 levels = 8 -> 5 pieces x 2
+// levels = 10).
+export const TOTAL_TURNS_WITH_LEGCUFFS = 10;
 
 /**
  * Point values driving the restore bar's progress score (see
@@ -293,27 +375,140 @@ function shuffle<T>(items: T[]): T[] {
   return result;
 }
 
-// Picks `count` word-indices from `pool`, starting at a rotating position
-// (wrapping around) determined by `offsetSeed`. At offsetSeed 0 this is just
-// `pool`'s own leading prefix. A nonzero offsetSeed (a repeat visit to a
-// round after a wrong-answer rollback) shifts the window so the retry blanks
+// No more than this many verse-position-consecutive words are ever blanked
+// together in one round - keeps blanks scattered through the verse instead
+// of clumping into one run, however many are needed for a given round. Only
+// relaxed (see selectScatteredPositions below) when a round needs more
+// blanks than the verse can fit while honoring this cap - unavoidable once a
+// round's count gets close to the full word count.
+const MAX_CONSECUTIVE_BLANKS = 2;
+
+// Rotates `pool` (a full permutation, same length back out) starting at a
+// rotating position determined by `offsetSeed`. At offsetSeed 0 this is just
+// `pool` unchanged. A nonzero offsetSeed (a repeat visit to a round after a
+// wrong-answer rollback) shifts the starting point so the retry prioritizes
 // different words than the previous visit did.
-function selectWindow(pool: number[], count: number, offsetSeed: number): number[] {
+function rotateArray(pool: number[], offsetSeed: number): number[] {
   const n = pool.length;
   if (n === 0) return [];
-  const clampedCount = Math.min(count, n);
   const offset = ((offsetSeed % n) + n) % n;
-  return Array.from({ length: clampedCount }, (_, i) => pool[(offset + i) % n]);
+  return Array.from({ length: n }, (_, i) => pool[(offset + i) % n]);
+}
+
+// Splits `count` into groups of at most `groupSize` each - every group but
+// possibly the last is exactly `groupSize`.
+function splitIntoGroups(count: number, groupSize: number): number[] {
+  const groups: number[] = [];
+  let remaining = count;
+  while (remaining > 0) {
+    const size = Math.min(groupSize, remaining);
+    groups.push(size);
+    remaining -= size;
+  }
+  return groups;
+}
+
+// Selects exactly `count` distinct indices from [0, verseWordCount), spread
+// across the whole range with no more than `maxConsecutive` ever
+// consecutive - GUARANTEED whenever mathematically possible, by
+// construction: `count` is split into groups of at most `maxConsecutive`,
+// each group separated from the next by at least one unselected word, with
+// any left-over slack distributed across the gaps (rotated by
+// `rotationSeed`, so different rounds/retries land the groups in different
+// places) rather than piled up in one spot. Falls back to simple even
+// spacing (still spread out, just no longer cap-guaranteed) only once
+// `count` is high enough relative to `verseWordCount` that honoring the cap
+// is mathematically impossible.
+function selectScatteredPositions(
+  verseWordCount: number,
+  count: number,
+  maxConsecutive: number,
+  rotationSeed: number
+): number[] {
+  if (count >= verseWordCount) return Array.from({ length: verseWordCount }, (_, i) => i);
+  if (count <= 0) return [];
+
+  const groupSizes = splitIntoGroups(count, maxConsecutive);
+  const numGroups = groupSizes.length;
+  const minGaps = numGroups - 1; // at least 1 separator between every pair of adjacent groups
+  const totalGapSlots = verseWordCount - count;
+  const extraSlack = totalGapSlots - minGaps;
+
+  if (extraSlack < 0) {
+    return Array.from({ length: count }, (_, i) => Math.floor((i * verseWordCount) / count));
+  }
+
+  // Distributes extraSlack across numGroups+1 "gap buckets" (before the
+  // first group, between each pair, after the last) as evenly as possible,
+  // rotating which buckets get the +1 remainder by rotationSeed.
+  const numBuckets = numGroups + 1;
+  const bucketBase = Math.floor(extraSlack / numBuckets);
+  const bucketRemainder = extraSlack % numBuckets;
+  const bucketOrder = rotateArray(
+    Array.from({ length: numBuckets }, (_, i) => i),
+    rotationSeed
+  );
+  const bucketExtra = new Array(numBuckets).fill(0);
+  for (let i = 0; i < bucketRemainder; i++) bucketExtra[bucketOrder[i]] = 1;
+
+  const positions: number[] = [];
+  let cursor = bucketBase + bucketExtra[0];
+  for (let g = 0; g < numGroups; g++) {
+    for (let k = 0; k < groupSizes[g]; k++) {
+      positions.push(cursor);
+      cursor += 1;
+    }
+    if (g < numGroups - 1) {
+      cursor += 1 + bucketBase + bucketExtra[g + 1];
+    }
+  }
+  return positions;
+}
+
+// Greedily selects `count` indices from `priorityCandidates` (already
+// rotated/ordered by caller), skipping any candidate that would push a
+// verse-position run past `maxConsecutive` selected words in a row - so
+// higher-priority (e.g. thematically important) words are preferred while
+// the chosen set still reads as scattered rather than clustered. If an
+// unlucky priority order leaves the greedy pass short of `count` (it can
+// legally reach one arrangement but not others), falls back to the
+// GUARANTEED positional construction above instead of ever silently
+// violating the cap when avoiding it was still possible.
+function selectScattered(
+  priorityCandidates: number[],
+  count: number,
+  maxConsecutive: number,
+  verseWordCount: number,
+  rotationSeed: number
+): number[] {
+  const chosen = new Set<number>();
+
+  const wouldViolate = (index: number): boolean => {
+    let runLength = 1;
+    for (let step = 1; chosen.has(index - step); step++) runLength++;
+    for (let step = 1; chosen.has(index + step); step++) runLength++;
+    return runLength > maxConsecutive;
+  };
+
+  for (const candidate of priorityCandidates) {
+    if (chosen.size >= count) break;
+    if (wouldViolate(candidate)) continue;
+    chosen.add(candidate);
+  }
+
+  if (chosen.size >= count) return [...chosen];
+  return selectScatteredPositions(verseWordCount, count, maxConsecutive, rotationSeed);
 }
 
 /**
  * Total turns a run through this session's curve actually takes, given how
  * many extra rounds wrong answers have appended so far - the hook uses this
  * (not the fixed TOTAL_TURNS_FOR_PERFECT_RUN) to know which round is really
- * the last one.
+ * the last one. `baseTotalTurns` defaults to the non-handcuffs 6-round
+ * budget; pass TOTAL_TURNS_WITH_HANDCUFFS for an 8-round curve.
  */
-export function getEffectiveTotalTurns(extra: ExtraRoundCounts): number {
-  return TOTAL_TURNS_FOR_PERFECT_RUN + extra.wordBank + extra.dropdown + extra.fillInBlank;
+export function getEffectiveTotalTurns(extra: ExtraRoundCounts, baseTotalTurns: number = TOTAL_TURNS_FOR_PERFECT_RUN): number {
+  return baseTotalTurns + extra.wordBank + extra.dropdown + extra.fillInBlank;
 }
 
 /**
@@ -326,30 +521,43 @@ export function getEffectiveTotalTurns(extra: ExtraRoundCounts): number {
 export function buildRoundCurve(verseText: string) {
   const words = tokenizeVerseWords(verseText);
   const verseWordCount = words.length;
-  const verseLetterCount = words.reduce((sum, w) => sum + w.value.length, 0);
 
-  const candidateSet = new Set(CANDIDATE_IMPORTANT_WORDS);
+  // See HANDCUFFS_WORD_THRESHOLD/LEGCUFFS_WORD_THRESHOLD and
+  // TOTAL_TURNS_WITH_HANDCUFFS/TOTAL_TURNS_WITH_LEGCUFFS's own comments - a
+  // longer verse gets a 4th (handcuffs) or 5th (legcuffs) gear piece plus 2
+  // more fill-in-blank rounds per tier. Every derivation below
+  // (fillInBlankGrowthRoundCount, battleProgress) uses this LOCAL total, not
+  // the module-level TOTAL_TURNS_FOR_PERFECT_RUN, so it varies correctly per
+  // verse. `includesLegcuffs` implies `includesHandcuffs` since
+  // LEGCUFFS_WORD_THRESHOLD > HANDCUFFS_WORD_THRESHOLD.
+  const includesHandcuffs = verseWordCount > HANDCUFFS_WORD_THRESHOLD;
+  const includesLegcuffs = verseWordCount > LEGCUFFS_WORD_THRESHOLD;
+  const totalTurnsForPerfectRun = includesLegcuffs
+    ? TOTAL_TURNS_WITH_LEGCUFFS
+    : includesHandcuffs
+      ? TOTAL_TURNS_WITH_HANDCUFFS
+      : TOTAL_TURNS_FOR_PERFECT_RUN;
+  // See BATTLE_PROGRESS's own doc comment for the full derivation - this is
+  // the same formula, just computed against this verse's own total turns
+  // instead of the fixed 6-round default.
+  const battleProgress: BattleProgressConfig = {
+    correctAnswerGain: 200 / (totalTurnsForPerfectRun + 1),
+    setbackRatio: 0.5,
+  };
+
+  // Every significant word (language-agnostic - see isSignificantWord) is a
+  // candidate for word-bank/dropdown/fill-in-blank blanks, for every verse
+  // and every language alike - no hardcoded, verse-specific vocabulary list.
+  // If a round needs more than this pool has (rare - a very short verse),
+  // selectImportantWords/selectFillInBlankWords below already fall back to
+  // pulling from the FULL word range via selectScatteredPositions.
   const importantIndices: number[] = [];
   words.forEach((w, i) => {
-    if (candidateSet.has(w.value.toLowerCase())) importantIndices.push(i);
+    if (isSignificantWord(w.value)) importantIndices.push(i);
   });
-
-  // If this translation's wording doesn't contain enough of the themed
-  // candidate words, pad with other significant words so word-bank/dropdown
-  // rounds always have enough to work with.
-  const minImportantNeeded = Math.max(DROPDOWN_START_COUNT, WORD_BANK_START_COUNT + WORD_BANK_ROUND_COUNT - 1);
   const importantSet = new Set(importantIndices);
-  if (importantIndices.length < minImportantNeeded) {
-    words.forEach((w, i) => {
-      if (importantIndices.length >= minImportantNeeded) return;
-      if (importantSet.has(i)) return;
-      if (isSignificantWord(w.value)) {
-        importantIndices.push(i);
-        importantSet.add(i);
-      }
-    });
-  }
-  // Last resort (a very short fallback verse): any word counts as "important".
+  // Last resort (a very short verse with no significant words at all): any
+  // word counts as "important".
   if (importantIndices.length === 0) {
     words.forEach((_, i) => importantIndices.push(i));
   }
@@ -358,7 +566,9 @@ export function buildRoundCurve(verseText: string) {
 
   function selectImportantWords(roundIndexInPhase: number, startCount: number, variant: number): number[] {
     const count = roundIndexInPhase + startCount;
-    return selectWindow(importantIndices, count, roundIndexInPhase + variant);
+    const seed = roundIndexInPhase + variant;
+    const rotated = rotateArray(importantIndices, seed);
+    return selectScattered(rotated, count, MAX_CONSECUTIVE_BLANKS, verseWordCount, seed);
   }
 
   // Fill-in-blank phase's growth order: important words first (shuffled),
@@ -367,40 +577,34 @@ export function buildRoundCurve(verseText: string) {
   const remainingWords = words.map((_, i) => i).filter((i) => !importantSet.has(i));
   const priorityOrder = [...shuffle(importantIndices), ...shuffle(remainingWords)];
 
-  function selectFillInBlankWords(count: number, variant: number): number[] {
-    return selectWindow(priorityOrder, count, variant);
+  // Rotates the priority order's starting point by `roundIndexInPhase` (same
+  // pattern as selectImportantWords above) instead of always starting from
+  // offset 0 - otherwise, since the selection only ever GROWS round to
+  // round, every round would just prefer the same leading words of
+  // priorityOrder, so words near the end would never be individually
+  // blanked until the single all-at-once full-recall round. Rotating the
+  // start means later (bigger) rounds reach those words too. The scattering
+  // in selectScattered is what actually spreads the chosen indices through
+  // the verse (capping consecutive runs) - the rotation on top of that just
+  // varies WHICH words compete for inclusion each round/retry.
+  function selectFillInBlankWords(count: number, roundIndexInPhase: number, variant: number): number[] {
+    const seed = roundIndexInPhase + variant;
+    const rotated = rotateArray(priorityOrder, seed);
+    return selectScattered(rotated, count, MAX_CONSECUTIVE_BLANKS, verseWordCount, seed);
   }
-
-  // Smallest word count (from the front of priorityOrder) whose cumulative
-  // letters exceed half the verse's total letters - the fill-in-blank growth
-  // phase aims to land as close to this as it can before jumping to full recall.
-  function computeFullRecallCount(): number {
-    const half = verseLetterCount / 2;
-    let cumulative = 0;
-    for (let n = 1; n <= verseWordCount; n++) {
-      cumulative += words[priorityOrder[n - 1]].value.length;
-      if (cumulative > half) return n;
-    }
-    return verseWordCount;
-  }
-  const fullRecallCrossingCount = computeFullRecallCount();
 
   const fillInBlankStartCount = dropdownStartCount + (DROPDOWN_ROUND_COUNT - 1);
   const fillInBlankGrowthRoundCount = Math.max(
     1,
-    TOTAL_TURNS_FOR_PERFECT_RUN - WORD_BANK_ROUND_COUNT - DROPDOWN_ROUND_COUNT - 2
+    totalTurnsForPerfectRun - WORD_BANK_ROUND_COUNT - DROPDOWN_ROUND_COUNT - 2
   );
 
   // The fill-in-blank count for growth-phase index `index` (0-based within
-  // that phase) - steps by 2 words each round until doing so would land past
-  // the full-recall crossing count, then by 1 the rest of the way.
+  // that phase) - steps by 2 words every round, uncapped, right up to the
+  // last growth round; the round after that blanks every remaining word at
+  // once (full recall) regardless of where this count left off.
   function fillInBlankCountForIndex(index: number): number {
-    let count = fillInBlankStartCount;
-    for (let i = 0; i <= index; i++) {
-      const remainingGap = fullRecallCrossingCount - count;
-      const step = Math.max(1, Math.min(2, remainingGap));
-      count += step;
-    }
+    const count = fillInBlankStartCount + 2 * (index + 1);
     return Math.min(count, verseWordCount);
   }
 
@@ -450,7 +654,7 @@ export function buildRoundCurve(verseText: string) {
     if (roundIndexInPhase < fillInBlankGrowthCount) {
       return {
         challengeType: 'FILL_IN_BLANK',
-        blankWordIndices: selectFillInBlankWords(fillInBlankCountForIndex(roundIndexInPhase), variant),
+        blankWordIndices: selectFillInBlankWords(fillInBlankCountForIndex(roundIndexInPhase), roundIndexInPhase, variant),
         temptationLine: SILENCER_BATTLE_TEMPTATION_LINES.fillInBlank,
         tier: 'fillInBlank',
       };
@@ -477,5 +681,5 @@ export function buildRoundCurve(verseText: string) {
     };
   }
 
-  return { getRoundConfig };
+  return { getRoundConfig, totalTurnsForPerfectRun, battleProgress, includesHandcuffs, includesLegcuffs };
 }

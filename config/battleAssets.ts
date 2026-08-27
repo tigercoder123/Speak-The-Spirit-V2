@@ -14,8 +14,17 @@ export const BATTLE_ASSETS = {
   // these two, and components/SilencerBattleScene.tsx, the one mount for
   // both.
   backgrounds: {
-    zoomedOut: '/battle.png',
-    zoomedIn: '/battle/Battle_Background_Songbeast.png',
+    // 4 interchangeable scenery themes for the exploration (zoomedOut) and
+    // battle (zoomedIn) views - hooks/useSilencerBattle.ts randomly picks
+    // ONE theme per battle (fresh on every mount, i.e. every time the player
+    // clicks Battle) and uses that same pair for both views, so the scene
+    // reads as one consistent place rather than switching art mid-battle.
+    themes: [
+      { zoomedOut: '/battle.png', zoomedIn: '/battle/Battle_Background_Songbeast.png' },
+      { zoomedOut: '/Hope_Background.jpg', zoomedIn: '/battle/Hope_Battle_Background.png' },
+      { zoomedOut: '/Joy_Background.png', zoomedIn: '/battle/Joy_Battle_Background.png' },
+      { zoomedOut: '/Love_Background.png', zoomedIn: '/battle/Love_Battle_Background.png' },
+    ],
     // The post-"Weapon Forged" free-roam scene (components/ChestReturnScene.tsx)
     // reached via QuestRiddle's CONTINUE button - same file the Crossroads
     // quest's own chest stage uses, but otherwise unrelated to it.
@@ -46,18 +55,27 @@ export const BATTLE_ASSETS = {
     base: {
       body: '/battle/Songbeast_Body.png',
       head: '/battle/Songbeast_Head.png',
-      legsTail: '/battle/Songbeast_Legs_Tail.png',
+      // The lower body used to be one flat Songbeast_Legs_Tail.png layer -
+      // now 4 independently-stacked full-canvas (666x375, same coordinate
+      // space as body/head) parts so each can be positioned/animated on its
+      // own. See components/battle/SongbeastBattleAvatar.tsx's stacking
+      // order for how these 4 combine with `body` between them.
+      frontLegs: '/battle/Songbeast_Legs_Front.png',
+      backLegs: '/battle/Songbeast_Legs_Back.png',
+      belly: '/battle/Songbeast_Belly.png',
+      tail: '/battle/Songbeast_Tail.png',
       muzzle: '/battle/Songbeast_Muzzle.png',
     },
     // Each gear piece the Silencer fitted the Songbeast with, individually
     // addressable by the ON/HALF_ON/REMOVED state machine in
     // hooks/useSilencerBattle.ts (GearPieceState). "main"/"add" are NOT a
     // state - they're a permanent z-depth split of that ONE piece's own
-    // artwork around the head (confirmed against
-    // components/battle/SongbeastBattleAvatar.tsx's existing rendering):
-    // "add" renders behind the head, "main" in front of it. Both layers of
-    // a piece always move together across every state. The muzzle (in
-    // `base` above) has no such split - it doesn't need one.
+    // artwork (confirmed against components/battle/SongbeastBattleAvatar.tsx's
+    // existing rendering): "add" renders behind its anchor (the head, for
+    // glasses/headphones), "main" in front of it. Both layers of a piece
+    // always move together across every state (handcuffs' half-on pose is
+    // the one deliberate exception - see SongbeastBattleAvatar.tsx). The
+    // muzzle (in `base` above) has no such split - it doesn't need one.
     gear: {
       glasses: {
         main: '/battle/Songbeast_Glasses_Main.png',
@@ -66,6 +84,28 @@ export const BATTLE_ASSETS = {
       headphones: {
         main: '/battle/Songbeast_Headphones_Main.png',
         add: '/battle/Songbeast_Headphones_Add.png',
+      },
+      // Only present/rendered when config/silencerBattleRounds.ts's
+      // getGearPieceOrder(...) includes 'handcuffs' for this battle's verse
+      // (see SongbeastBattleAvatar.tsx's `includesHandcuffs` prop) - the
+      // Songbeast's wrists, near the front leg rather than the head.
+      // `main` is Arm_Back (renders IN FRONT, per explicit art direction)
+      // and `add` is Arm_Front (renders BEHIND) - inverted from their own
+      // filenames, same as glasses/headphones' main/add naming describes
+      // z-depth role, not which file is which.
+      handcuffs: {
+        main: '/battle/Songbeast_Arm_Back.png',
+        add: '/battle/Songbeast_Arm_Front.png',
+      },
+      // Only present/rendered when getGearPieceOrder(...) includes
+      // 'legcuffs' (see SongbeastBattleAvatar.tsx's `includesLegcuffs`
+      // prop) - anchored near the back leg instead of the front. Same
+      // main/add z-depth convention as handcuffs: `main` (Leg_Back) renders
+      // IN FRONT and stays fixed during the half-on pose; `add` (Leg_Front)
+      // renders BEHIND and is the one that goes askew.
+      legcuffs: {
+        main: '/battle/Songbeast_Leg_Back.png',
+        add: '/battle/Songbeast_Leg_Front.png',
       },
     },
     // Swapped in at the peak of the final-restoration flash, replacing

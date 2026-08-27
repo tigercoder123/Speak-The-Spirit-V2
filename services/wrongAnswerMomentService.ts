@@ -28,11 +28,12 @@ function timeoutAfter(ms: number): Promise<never> {
 export async function getFreshWrongAnswerMoment(
   gearPiece: GearPieceInfo,
   fallbackLine: string,
-  fallbackThought: string
+  fallbackThought: string,
+  languageName: string
 ): Promise<WrongAnswerMoment> {
   try {
     const result = await Promise.race([
-      generateSilencerWrongAnswerMoment(gearPiece.name, gearPiece.description),
+      generateSilencerWrongAnswerMoment(gearPiece.name, gearPiece.description, languageName),
       timeoutAfter(GENERATION_TIMEOUT_MS),
     ]);
 

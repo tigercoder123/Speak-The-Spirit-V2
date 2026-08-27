@@ -43,6 +43,10 @@ interface GameContextType {
   /** The player's chosen verse language code (e.g. 'en', 'es') - null until loaded/if unset. */
   bibleLanguage: string | null;
   setBibleLanguage: (language: string) => void;
+  /** The player's chosen memory-verse reference (e.g. "Hebrews 11:1"), settings-editable -
+   * null until loaded/if unset, in which case callers fall back to a default verse. */
+  bibleVerseReference: string | null;
+  setBibleVerseReference: (reference: string) => void;
 
   // Game Logic State
   introStep: number;
@@ -105,6 +109,14 @@ interface GameContextType {
    * challenge flow. Consumed and cleared by hooks/useSilencerBattle.ts on mount. */
   pendingBattleSkipToRestored: boolean;
   setPendingBattleSkipToRestored: (value: boolean) => void;
+
+  /** Dev cheat (see GameHeader.tsx's "Round 5" button) - one-shot, 1-indexed
+   * round number telling the Silencer battle to skip the EXPLORING walk-up
+   * and jump straight to that round once the verse loads, instead of
+   * starting at round 1. null means "no jump requested" (the normal case).
+   * Consumed and cleared by hooks/useSilencerBattle.ts on mount. */
+  pendingBattleDebugRound: number | null;
+  setPendingBattleDebugRound: (value: number | null) => void;
 }
 
 
@@ -169,11 +181,13 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const [gradeLevel, setGradeLevel] = useState<string | null>(null);
   const [bibleVersionId, setBibleVersionIdState] = useState<number | null>(null);
   const [bibleLanguage, setBibleLanguageState] = useState<string | null>(null);
+  const [bibleVerseReference, setBibleVerseReferenceState] = useState<string | null>(null);
 
   const [isMuted, setIsMuted] = useState(true);
   const[currentTrack,setCurrentTrack]= useState ('/audio/crossroads.mp3');
   const [pendingBattleSpawn, setPendingBattleSpawn] = useState<Position | null>(null);
   const [pendingBattleSkipToRestored, setPendingBattleSkipToRestored] = useState<boolean>(false);
+  const [pendingBattleDebugRound, setPendingBattleDebugRound] = useState<number | null>(null);
 
   // 👤 NEW: Derived character path for your 2D sprites!
   // Defaults to girlnobackground if NULL or not set to boy
@@ -277,6 +291,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         setGradeLevel(profile.grade_level || null);
         setBibleVersionIdState(profile.bible_version_id || null);
         setBibleLanguageState(profile.language || null);
+        setBibleVerseReferenceState(profile.bibleVerseReference || null);
 
         const loadedIslands = profile.clearedIslands || [];
         setClearedIslands(loadedIslands);
@@ -310,6 +325,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     clearedIslands?: string[];
     bible_version_id?: number;
     language?: string;
+    bibleVerseReference?: string;
     hasHolyWater?: boolean;
     powerUps?: Record<PowerUpType, number>;
   }) => {
@@ -444,6 +460,11 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     if (userId) saveProfile(userId, { language });
   };
 
+  const setBibleVerseReference = (reference: string) => {
+    setBibleVerseReferenceState(reference);
+    if (userId) saveProfile(userId, { bibleVerseReference: reference });
+  };
+
   // Visual shaker helper
   const triggerShake = () => {
     setShakeTrigger(true);
@@ -576,6 +597,8 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         setBibleVersionId,
         bibleLanguage,
         setBibleLanguage,
+        bibleVerseReference,
+        setBibleVerseReference,
         isMuted,
         setIsMuted,
         currentTrack,
@@ -584,6 +607,8 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         setPendingBattleSpawn,
         pendingBattleSkipToRestored,
         setPendingBattleSkipToRestored,
+        pendingBattleDebugRound,
+        setPendingBattleDebugRound,
       }}
     >
       {children}

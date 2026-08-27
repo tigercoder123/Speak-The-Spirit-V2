@@ -247,3 +247,43 @@ body {
    Debrief screen), so every green element reads as one consistent color. */
 .neo-btn-restore { background-color: #4ade80; }
 .neo-btn-restore:hover { background-color: #86efac; }
+
+/* SettingsModal.tsx - shared field styling so each settings field (language,
+   translation, verse) doesn't repeat the same Tailwind cluster three times. */
+.settings-modal-header {
+  background: linear-gradient(135deg, #facc15 0%, #fb923c 100%);
+  border-bottom: 4px solid #000;
+  padding: 1.5rem 2rem 1.25rem;
+}
+.settings-label {
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #94a3b8;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.settings-input {
+  background-color: #020617;
+  color: #fff;
+  border: 2px solid #334155;
+  padding: 0.75rem;
+  font-size: 1.05rem;
+  border-radius: 0.75rem;
+  outline: none;
+  transition: border-color 0.15s ease-out, box-shadow 0.15s ease-out;
+}
+.settings-input:focus {
+  border-color: #facc15;
+  box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.25);
+}
+.settings-preview-box {
+  min-height: 4.5rem;
+  background-color: #020617;
+  border: 2px solid #334155;
+  border-radius: 0.75rem;
+  padding: 0.75rem;
+  font-size: 0.9rem;
+}

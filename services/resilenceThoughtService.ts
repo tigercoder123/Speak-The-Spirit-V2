@@ -23,10 +23,10 @@ function timeoutAfter(ms: number): Promise<never> {
  * passed in rather than owned here since it depends on the current round
  * tier, which only the caller knows.
  */
-export async function getFreshResilenceThought(temptationLineContent: string, fallbackThought: string): Promise<string> {
+export async function getFreshResilenceThought(temptationLineContent: string, fallbackThought: string, languageName: string): Promise<string> {
   try {
     const result = await Promise.race([
-      generateSongbeastResilenceThought(temptationLineContent),
+      generateSongbeastResilenceThought(temptationLineContent, languageName),
       timeoutAfter(GENERATION_TIMEOUT_MS),
     ]);
 

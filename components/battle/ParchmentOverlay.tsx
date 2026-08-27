@@ -3,6 +3,7 @@
 import { useRef, type ReactNode } from 'react';
 import { useGSAP } from '@gsap/react';
 import gsap from 'gsap';
+import { BATTLE_SCENE_SCALE } from '../../config/battleApproach';
 
 interface ParchmentOverlayProps {
   children: ReactNode;
@@ -15,15 +16,31 @@ interface ParchmentOverlayProps {
 // (border/shadow/background) stays on the child component - see
 // VerseParchment/ResponseChoices/FeedbackBanner - so this only owns
 // placement and the blurred pass-through edge.
+//
+// The card itself (and everything inside it - text, borders, padding,
+// inputs, buttons) is scaled up by the same BATTLE_SCENE_SCALE as the rest
+// of the battle scene, via a single CSS transform here rather than touching
+// every Tailwind size class in VerseParchment/ResponseChoices/FeedbackBanner -
+// one multiplier, applied once, scales the whole card uniformly. Rests at
+// BATTLE_SCENE_SCALE instead of the pop-in's usual 1, so the entrance
+// animation's "pop up slightly bigger" motion still reads the same, just
+// scaled.
 export default function ParchmentOverlay({ children }: ParchmentOverlayProps) {
   const edgeBlurRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
   useGSAP(() => {
     gsap.set(edgeBlurRef.current, { opacity: 0 });
-    gsap.set(contentRef.current, { opacity: 0, y: 8, scale: 0.96 });
+    gsap.set(contentRef.current, { opacity: 0, y: 8, scale: 0.96 * BATTLE_SCENE_SCALE });
     gsap.to(edgeBlurRef.current, { opacity: 1, duration: 0.3, ease: 'power1.out' });
-    gsap.to(contentRef.current, { opacity: 1, y: 0, scale: 1, duration: 0.4, ease: 'power2.out', delay: 0.05 });
+    gsap.to(contentRef.current, {
+      opacity: 1,
+      y: 0,
+      scale: BATTLE_SCENE_SCALE,
+      duration: 0.4,
+      ease: 'power2.out',
+      delay: 0.05,
+    });
   }, []);
 
   return (
