@@ -508,6 +508,17 @@ export function useSilencerBattle() {
   // 5th, instead of the base 6-round/3-piece one) - see that function's own
   // comments for the derivation.
   const roundCurve = useMemo(() => (verseText ? buildRoundCurve(verseText) : null), [verseText]);
+  // Every word index blanked in an earlier challenge THIS battle (see
+  // getRoundConfig's own usedWordIndices param) - a ref, not state, because
+  // getRoundConfig must stay a pure function of its explicit arguments (it's
+  // also called speculatively below to prefetch the NEXT round's distractors
+  // before that round is actually reached; a stateful/mutating lookup would
+  // corrupt that peek). Reset whenever the round curve itself is rebuilt
+  // (fresh verse/battle) rather than left stale across battles.
+  const usedWordIndicesRef = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    usedWordIndicesRef.current = new Set();
+  }, [roundCurve]);
   // Which gear pieces THIS battle actually tracks, in order - the base 3
   // plus 'handcuffs'/'legcuffs' when the verse qualifies. Falls back to the
   // base-3 order before verseText/roundCurve are ready (mirrors
@@ -540,16 +551,53 @@ export function useSilencerBattle() {
   const isFinalRound = roundNumber === totalRoundsForFinish - 1;
 
   const challengeVariant = roundVisitCounts[roundNumber] ?? 0;
-  const currentRound = useMemo(
-    () => (roundCurve ? roundCurve.getRoundConfig(roundNumber, challengeVariant, extraRounds) : null),
-    [roundCurve, roundNumber, challengeVariant, extraRounds]
-  );
+  // Deliberately NOT a plain useMemo keyed on extraRounds - extraRounds now
+  // bumps on every wrong answer (see handleSilencerTurnComplete), including
+  // a first miss that's meant to just retry the SAME round unchanged. extra
+  // only ever grows tier BOUNDARIES for rounds not yet computed; for an
+  // already-fixed roundNumber it can never change that round's own
+  // challengeType/blankWordIndices (the boundary check can only stay true
+  // once already true, and the per-round selection formulas don't read
+  // `extra` directly) - so recomputing here would be a same-content, new-
+  // object-reference no-op that still cascades into `challenge` getting a
+  // new reference below, wiping the player's in-progress answers and
+  // re-shuffling to different (but equally valid) blank words out from
+  // under them. Caching by (roundCurve, roundNumber, challengeVariant) only
+  // - ignoring extraRounds - keeps a first-miss retry byte-for-byte the same
+  // challenge, while a genuine round change (new roundNumber/variant) still
+  // recomputes fresh, using whatever extraRounds is current at that time.
+  const roundCacheRef = useRef<{
+    roundCurve: typeof roundCurve;
+    roundNumber: number;
+    challengeVariant: number;
+    round: ReturnType<NonNullable<typeof roundCurve>['getRoundConfig']> | null;
+  } | null>(null);
+  let currentRound: ReturnType<NonNullable<typeof roundCurve>['getRoundConfig']> | null;
+  if (
+    roundCacheRef.current &&
+    roundCacheRef.current.roundCurve === roundCurve &&
+    roundCacheRef.current.roundNumber === roundNumber &&
+    roundCacheRef.current.challengeVariant === challengeVariant
+  ) {
+    currentRound = roundCacheRef.current.round;
+  } else {
+    currentRound = roundCurve
+      ? roundCurve.getRoundConfig(roundNumber, challengeVariant, extraRounds, usedWordIndicesRef.current)
+      : null;
+    roundCacheRef.current = { roundCurve, roundNumber, challengeVariant, round: currentRound };
+  }
   // Mirrored for handleReSilenceEffectStart, which - like the other avatar
   // callbacks - has empty deps and reads current values via refs rather than
   // a closure captured however many renders ago the timeline was kicked off.
   const currentRoundTierRef = useRef(currentRound?.tier);
   useEffect(() => {
     currentRoundTierRef.current = currentRound?.tier;
+  }, [currentRound]);
+  // Commits THIS round's blanks into usedWordIndicesRef once it's actually
+  // reached (not on the speculative next-round peek below) - the only place
+  // the tracking is ever written to.
+  useEffect(() => {
+    currentRound?.blankWordIndices.forEach((i) => usedWordIndicesRef.current.add(i));
   }, [currentRound]);
 
   // Gloo-generated wrong-answer options for WORD_BANK/DROPDOWN rounds, for
@@ -1181,14 +1229,17 @@ export function useSilencerBattle() {
     setThoughtBubbleVisible(false);
     schedule(() => {
       setWrongBlanks([]);
+      // Every wrong answer - not just a streak's second consecutive miss -
+      // adds one extra round of whatever type was just missed, so the curve
+      // grows with a targeted round instead of silently falling through to
+      // getRoundConfig's default WHOLE_VERSE branch. Deliberately decoupled
+      // from the rollback below: this always fires, the rollback only fires
+      // on a second consecutive miss.
+      const key = missedChallengeTypeRef.current && extraRoundsKeyFor(missedChallengeTypeRef.current);
+      if (key) setExtraRounds((e) => ({ ...e, [key]: e[key] + 1 }));
       if (wrongStreakRef.current >= 2) {
         setWrongStreak(0);
-        const target = Math.max(0, roundNumberRef.current - 1);
-        if (target !== roundNumberRef.current) {
-          const key = missedChallengeTypeRef.current && extraRoundsKeyFor(missedChallengeTypeRef.current);
-          if (key) setExtraRounds((e) => ({ ...e, [key]: e[key] + 1 }));
-        }
-        goToRound(target);
+        goToRound(Math.max(0, roundNumberRef.current - 1));
       }
       setPhase('CHALLENGE');
     }, POST_SILENCER_PARCHMENT_DELAY_MS);
@@ -1275,7 +1326,7 @@ export function useSilencerBattle() {
         // no such head start, so it always falls through to
         // buildFallbackDistractors instead (see distractorLookup below).
         if (roundCurve && bibleLanguage) {
-          const nextRound = roundCurve.getRoundConfig(roundNumber + 1, 0, extraRounds);
+          const nextRound = roundCurve.getRoundConfig(roundNumber + 1, 0, extraRounds, usedWordIndicesRef.current);
           if (nextRound.challengeType === 'WORD_BANK' || nextRound.challengeType === 'DROPDOWN') {
             const nextLanguageName = LANGUAGE_NAMES[bibleLanguage] ?? bibleLanguage;
             const words = tokenizeVerseWords(currentVerseText);

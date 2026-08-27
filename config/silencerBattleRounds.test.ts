@@ -134,6 +134,82 @@ describe('buildRoundCurve across differently-worded translations', () => {
   });
 });
 
+describe.each([
+  { name: 'KJV', text: KJV_TEXT },
+  { name: 'NIV', text: NIV_TEXT },
+  { name: 'differently-worded paraphrase', text: FALLBACK_TEXT },
+])('buildRoundCurve with usedWordIndices tracking ($name wording)', ({ text }) => {
+  // Mirrors how hooks/useSilencerBattle.ts threads usedWordIndicesRef
+  // through: each round's own blankWordIndices are folded into `used`
+  // before computing the next round.
+  function runFullCurveTrackingUsedWords() {
+    const curve = buildRoundCurve(text);
+    const words = tokenizeVerseWords(text);
+    const totalTurns = getEffectiveTotalTurns(NO_EXTRA_ROUNDS);
+    const used = new Set<number>();
+    const rounds = [];
+    for (let i = 0; i < totalTurns; i++) {
+      const round = curve.getRoundConfig(i, 0, NO_EXTRA_ROUNDS, used);
+      rounds.push(round);
+      round.blankWordIndices.forEach((index) => used.add(index));
+    }
+    return { words, rounds };
+  }
+
+  it('never blanks a word a second time until every word in the verse has been blanked at least once', () => {
+    const { words, rounds } = runFullCurveTrackingUsedWords();
+    const seen = new Set<number>();
+    for (const round of rounds) {
+      // fullRecall/WHOLE_VERSE are exempt by design - both intentionally
+      // blank every word regardless of history (see getRoundConfig's own
+      // branches), so they don't go through the never-repeat preference.
+      if (round.tier === 'fullRecall' || round.challengeType === 'WHOLE_VERSE') continue;
+      for (const index of round.blankWordIndices) {
+        if (seen.has(index)) {
+          expect(seen.size).toBeGreaterThanOrEqual(words.length);
+        }
+        seen.add(index);
+      }
+    }
+  });
+
+  it('never repeats a significant word while a non-significant word in the verse has never been blanked', () => {
+    const { words, rounds } = runFullCurveTrackingUsedWords();
+    const significant = new Set(
+      words.map((w, i) => (isSignificantWord(w.value) ? i : -1)).filter((i) => i >= 0)
+    );
+    const nonSignificant = words.map((_, i) => i).filter((i) => !significant.has(i));
+
+    const seen = new Set<number>();
+    for (const round of rounds) {
+      // fullRecall/WHOLE_VERSE are exempt by design - both intentionally
+      // blank every word regardless of history (see getRoundConfig's own
+      // branches), so they don't go through the never-repeat preference.
+      if (round.tier === 'fullRecall' || round.challengeType === 'WHOLE_VERSE') continue;
+      for (const index of round.blankWordIndices) {
+        if (seen.has(index) && significant.has(index)) {
+          expect(nonSignificant.every((i) => seen.has(i))).toBe(true);
+        }
+        seen.add(index);
+      }
+    }
+  });
+
+  it('every round still hits its designed blank count, same as with no history', () => {
+    const curve = buildRoundCurve(text);
+    const totalTurns = getEffectiveTotalTurns(NO_EXTRA_ROUNDS);
+    const used = new Set<number>();
+    for (let i = 0; i < totalTurns; i++) {
+      const withoutHistory = buildRoundCurve(text).getRoundConfig(i, 0, NO_EXTRA_ROUNDS);
+      const withHistory = curve.getRoundConfig(i, 0, NO_EXTRA_ROUNDS, used);
+      if (withoutHistory.challengeType !== 'WHOLE_VERSE') {
+        expect(withHistory.blankWordIndices.length).toBe(withoutHistory.blankWordIndices.length);
+      }
+      withHistory.blankWordIndices.forEach((index) => used.add(index));
+    }
+  });
+});
+
 // A verse over HANDCUFFS_WORD_THRESHOLD (20) words - short verses above
 // (KJV/NIV/FALLBACK, all well under 20 words) never trigger this path.
 const LONG_VERSE_TEXT =

@@ -45,8 +45,14 @@ export default function BattleExplorationView({
   includesLegcuffs,
 }: BattleExplorationViewProps) {
   return (
+    // `isolate` traps this scene's internal z-index values (the player's
+    // z-20 in particular) inside a local stacking context - without it, that
+    // z-20 escapes all the way to the page's root stacking context (since no
+    // ancestor between here and <body> sets a z-index of its own) and can
+    // out-rank unrelated fixed-position overlays elsewhere on the page, like
+    // SettingsModal's z-50 backdrop, even though 20 < 50.
     <div
-      className="relative mx-auto flex w-full flex-col overflow-hidden rounded-xl bg-gradient-to-b from-green-950 to-slate-900 text-white"
+      className="relative isolate mx-auto flex w-full flex-col overflow-hidden rounded-xl bg-gradient-to-b from-green-950 to-slate-900 text-white"
       style={{ maxWidth: BATTLE_SCENE_MAX_WIDTH, aspectRatio: BATTLE_SCENE_ASPECT_RATIO }}
     >
       <div className="relative flex-1">

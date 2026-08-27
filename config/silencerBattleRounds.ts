@@ -465,23 +465,23 @@ function selectScatteredPositions(
   return positions;
 }
 
-// Greedily selects `count` indices from `priorityCandidates` (already
+// Greedily selects up to `count` indices from `candidates` (already
 // rotated/ordered by caller), skipping any candidate that would push a
 // verse-position run past `maxConsecutive` selected words in a row - so
-// higher-priority (e.g. thematically important) words are preferred while
-// the chosen set still reads as scattered rather than clustered. If an
-// unlucky priority order leaves the greedy pass short of `count` (it can
-// legally reach one arrangement but not others), falls back to the
-// GUARANTEED positional construction above instead of ever silently
-// violating the cap when avoiding it was still possible.
-function selectScattered(
-  priorityCandidates: number[],
+// higher-priority candidates are preferred while the chosen set still reads
+// as scattered rather than clustered. `seedChosen` primes the chosen set (and
+// its own consecutive-run accounting) before the pass starts, so a second
+// call can keep filling where an earlier one left off without re-violating
+// the cap against those earlier picks (see selectPreferringFresh below). May
+// return fewer than `count` if `candidates` legally can't supply that many -
+// callers decide how to handle a shortfall.
+function greedyScatter(
+  candidates: number[],
   count: number,
   maxConsecutive: number,
-  verseWordCount: number,
-  rotationSeed: number
+  seedChosen: Iterable<number> = []
 ): number[] {
-  const chosen = new Set<number>();
+  const chosen = new Set<number>(seedChosen);
 
   const wouldViolate = (index: number): boolean => {
     let runLength = 1;
@@ -490,13 +490,66 @@ function selectScattered(
     return runLength > maxConsecutive;
   };
 
-  for (const candidate of priorityCandidates) {
+  for (const candidate of candidates) {
     if (chosen.size >= count) break;
-    if (wouldViolate(candidate)) continue;
+    if (chosen.has(candidate) || wouldViolate(candidate)) continue;
     chosen.add(candidate);
   }
 
-  if (chosen.size >= count) return [...chosen];
+  return [...chosen];
+}
+
+// Greedily selects `count` indices from `priorityCandidates` (already
+// rotated/ordered by caller). If an unlucky priority order leaves the greedy
+// pass short of `count` (it can legally reach one arrangement but not
+// others), falls back to the GUARANTEED positional construction above
+// instead of ever silently violating the cap when avoiding it was still
+// possible.
+function selectScattered(
+  priorityCandidates: number[],
+  count: number,
+  maxConsecutive: number,
+  verseWordCount: number,
+  rotationSeed: number
+): number[] {
+  const chosen = greedyScatter(priorityCandidates, count, maxConsecutive);
+  if (chosen.length >= count) return chosen;
+  return selectScatteredPositions(verseWordCount, count, maxConsecutive, rotationSeed);
+}
+
+// Same guarantee as selectScattered, but tries EVERY never-blanked candidate
+// first before letting any already-blanked candidate in - so a repeat only
+// happens once fresh candidates genuinely can't fill the round, never
+// merely because of where a fresh word happened to land in a single shared
+// priority list. Falls back the same way selectScattered does if even
+// fresh+used together can't reach `count`.
+//
+// When there's slack (more fresh candidates than `count` needs), the normal
+// spacing-respecting greedy pass picks among them. But when the round needs
+// EVERY remaining fresh word just to reach `count` (fresh candidates <=
+// count), the scattering cap is skipped entirely and all of them are taken
+// as-is - preferring a genuinely fresh word over scattering polish whenever
+// the two conflict. This matters because the cap can make a subset
+// mathematically un-fillable even though every remaining word is available
+// (e.g. 3 of the only remaining fresh words sit at consecutive verse
+// positions - at most 2 of them could ever be chosen together while
+// honoring the cap, so without this, an avoidable repeat would be forced
+// even though nothing was actually scarce).
+function selectPreferringFresh(
+  freshCandidates: number[],
+  usedCandidates: number[],
+  count: number,
+  maxConsecutive: number,
+  verseWordCount: number,
+  rotationSeed: number
+): number[] {
+  const fromFresh =
+    freshCandidates.length <= count ? freshCandidates : greedyScatter(freshCandidates, count, maxConsecutive);
+  if (fromFresh.length >= count) return fromFresh;
+
+  const withRepeats = greedyScatter(usedCandidates, count, maxConsecutive, fromFresh);
+  if (withRepeats.length >= count) return withRepeats;
+
   return selectScatteredPositions(verseWordCount, count, maxConsecutive, rotationSeed);
 }
 
@@ -564,33 +617,53 @@ export function buildRoundCurve(verseText: string) {
 
   const dropdownStartCount = Math.min(DROPDOWN_START_COUNT, importantIndices.length);
 
-  function selectImportantWords(roundIndexInPhase: number, startCount: number, variant: number): number[] {
-    const count = roundIndexInPhase + startCount;
-    const seed = roundIndexInPhase + variant;
-    const rotated = rotateArray(importantIndices, seed);
-    return selectScattered(rotated, count, MAX_CONSECUTIVE_BLANKS, verseWordCount, seed);
+  // Every word NOT already counted as significant - the "rest of the verse"
+  // tier that a round only reaches once it's used up every never-blanked
+  // significant word.
+  const remainingWords = words.map((_, i) => i).filter((i) => !importantSet.has(i));
+
+  // Builds a round's blank candidates as two pools, each internally ordered
+  // significant-first then the rest (shuffled/rotated by `seed`, so retries
+  // still vary within a pool, same purpose as the old per-function rotation
+  // this replaces): `fresh` (never blanked this battle) and `used` (already
+  // blanked). Handed to selectPreferringFresh, which exhausts `fresh`
+  // entirely - respecting the scattering cap - before ever touching `used`,
+  // so significant words never repeat before non-significant ones have had
+  // their first use (fresh always covers both significant and
+  // non-significant before used is even considered).
+  function buildBlankCandidates(
+    seed: number,
+    usedWordIndices: ReadonlySet<number>
+  ): { fresh: number[]; used: number[] } {
+    const tier = (pool: number[], used: boolean) =>
+      rotateArray(shuffle(pool.filter((i) => usedWordIndices.has(i) === used)), seed);
+    return {
+      fresh: [...tier(importantIndices, false), ...tier(remainingWords, false)],
+      used: [...tier(importantIndices, true), ...tier(remainingWords, true)],
+    };
   }
 
-  // Fill-in-blank phase's growth order: important words first (shuffled),
-  // then every remaining word (also shuffled) once the important pool runs
-  // out. Computed once per verse text, not re-shuffled per round.
-  const remainingWords = words.map((_, i) => i).filter((i) => !importantSet.has(i));
-  const priorityOrder = [...shuffle(importantIndices), ...shuffle(remainingWords)];
-
-  // Rotates the priority order's starting point by `roundIndexInPhase` (same
-  // pattern as selectImportantWords above) instead of always starting from
-  // offset 0 - otherwise, since the selection only ever GROWS round to
-  // round, every round would just prefer the same leading words of
-  // priorityOrder, so words near the end would never be individually
-  // blanked until the single all-at-once full-recall round. Rotating the
-  // start means later (bigger) rounds reach those words too. The scattering
-  // in selectScattered is what actually spreads the chosen indices through
-  // the verse (capping consecutive runs) - the rotation on top of that just
-  // varies WHICH words compete for inclusion each round/retry.
-  function selectFillInBlankWords(count: number, roundIndexInPhase: number, variant: number): number[] {
+  function selectImportantWords(
+    roundIndexInPhase: number,
+    startCount: number,
+    variant: number,
+    usedWordIndices: ReadonlySet<number> = new Set()
+  ): number[] {
+    const count = roundIndexInPhase + startCount;
     const seed = roundIndexInPhase + variant;
-    const rotated = rotateArray(priorityOrder, seed);
-    return selectScattered(rotated, count, MAX_CONSECUTIVE_BLANKS, verseWordCount, seed);
+    const { fresh, used } = buildBlankCandidates(seed, usedWordIndices);
+    return selectPreferringFresh(fresh, used, count, MAX_CONSECUTIVE_BLANKS, verseWordCount, seed);
+  }
+
+  function selectFillInBlankWords(
+    count: number,
+    roundIndexInPhase: number,
+    variant: number,
+    usedWordIndices: ReadonlySet<number> = new Set()
+  ): number[] {
+    const seed = roundIndexInPhase + variant;
+    const { fresh, used } = buildBlankCandidates(seed, usedWordIndices);
+    return selectPreferringFresh(fresh, used, count, MAX_CONSECUTIVE_BLANKS, verseWordCount, seed);
   }
 
   const fillInBlankStartCount = dropdownStartCount + (DROPDOWN_ROUND_COUNT - 1);
@@ -621,11 +694,18 @@ export function buildRoundCurve(verseText: string) {
    *
    * `extra` is how many bonus rounds wrong answers have appended onto each
    * phase so far - defaults to none for a perfect run.
+   *
+   * `usedWordIndices` is every word index blanked in an earlier challenge
+   * this battle - WORD_BANK/DROPDOWN/FILL_IN_BLANK prefer words not in this
+   * set (see buildBlankCandidates), only repeating one once every word in
+   * the verse has been blanked at least once. Defaults to empty so existing
+   * callers (tests, the next-round prefetch peek) are unaffected.
    */
   function getRoundConfig(
     roundNumber: number,
     variant = 0,
-    extra: ExtraRoundCounts = NO_EXTRA_ROUNDS
+    extra: ExtraRoundCounts = NO_EXTRA_ROUNDS,
+    usedWordIndices: ReadonlySet<number> = new Set()
   ): SilencerBattleRoundConfig {
     const wordBankRoundCount = WORD_BANK_ROUND_COUNT + extra.wordBank;
     const dropdownRoundCount = DROPDOWN_ROUND_COUNT + extra.dropdown;
@@ -634,7 +714,7 @@ export function buildRoundCurve(verseText: string) {
     if (roundNumber < wordBankRoundCount) {
       return {
         challengeType: 'WORD_BANK',
-        blankWordIndices: selectImportantWords(roundNumber, WORD_BANK_START_COUNT, variant),
+        blankWordIndices: selectImportantWords(roundNumber, WORD_BANK_START_COUNT, variant, usedWordIndices),
         temptationLine: SILENCER_BATTLE_TEMPTATION_LINES.wordBank,
         tier: 'wordBank',
       };
@@ -644,7 +724,7 @@ export function buildRoundCurve(verseText: string) {
     if (dropdownRoundIndex < dropdownRoundCount) {
       return {
         challengeType: 'DROPDOWN',
-        blankWordIndices: selectImportantWords(dropdownRoundIndex, dropdownStartCount, variant),
+        blankWordIndices: selectImportantWords(dropdownRoundIndex, dropdownStartCount, variant, usedWordIndices),
         temptationLine: SILENCER_BATTLE_TEMPTATION_LINES.dropdown,
         tier: 'dropdown',
       };
@@ -654,7 +734,12 @@ export function buildRoundCurve(verseText: string) {
     if (roundIndexInPhase < fillInBlankGrowthCount) {
       return {
         challengeType: 'FILL_IN_BLANK',
-        blankWordIndices: selectFillInBlankWords(fillInBlankCountForIndex(roundIndexInPhase), roundIndexInPhase, variant),
+        blankWordIndices: selectFillInBlankWords(
+          fillInBlankCountForIndex(roundIndexInPhase),
+          roundIndexInPhase,
+          variant,
+          usedWordIndices
+        ),
         temptationLine: SILENCER_BATTLE_TEMPTATION_LINES.fillInBlank,
         tier: 'fillInBlank',
       };

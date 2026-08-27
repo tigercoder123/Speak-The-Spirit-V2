@@ -87,15 +87,40 @@ export default function VerseParchment({
   // instead of the player having to reach for the mouse between blanks.
   const typedBlankRefs = useRef(new Map<number, HTMLInputElement | HTMLSelectElement>());
 
-  const focusNextEmptyTypedBlank = (fromBlankIndex: number) => {
-    const typedBlankIndices = challenge.segments
+  const typedBlankIndicesInOrder = () =>
+    challenge.segments
       .filter((s): s is Extract<ChallengeSegment, { kind: 'blank' }> => s.kind === 'blank' && challenge.type !== 'WORD_BANK')
       .map((s) => s.blankIndex);
+
+  const focusNextEmptyTypedBlank = (fromBlankIndex: number) => {
+    const typedBlankIndices = typedBlankIndicesInOrder();
     const isEmpty = (blankIndex: number) => !(answers[blankIndex] ?? '').trim();
     const fromPos = typedBlankIndices.indexOf(fromBlankIndex);
     const target =
       typedBlankIndices.slice(fromPos + 1).find(isEmpty) ?? typedBlankIndices.find(isEmpty);
     if (target !== undefined) typedBlankRefs.current.get(target)?.focus();
+  };
+
+  // Backspace at the very start of a blank (cursor collapsed at position 0,
+  // nothing selected - so the keystroke would otherwise delete nothing)
+  // jumps focus to the previous typed blank in reading order, cursor placed
+  // at ITS end so repeated backspacing can keep walking back through
+  // already-typed answers. No-ops (default browser behavior, which deletes
+  // nothing at position 0 anyway) on the first blank - there's nothing
+  // before it to jump to.
+  const focusPreviousTypedBlank = (fromBlankIndex: number): boolean => {
+    const typedBlankIndices = typedBlankIndicesInOrder();
+    const fromPos = typedBlankIndices.indexOf(fromBlankIndex);
+    if (fromPos <= 0) return false;
+    const target = typedBlankIndices[fromPos - 1];
+    const el = typedBlankRefs.current.get(target);
+    if (!el) return false;
+    el.focus();
+    if (el instanceof HTMLInputElement) {
+      const end = el.value.length;
+      el.setSelectionRange(end, end);
+    }
+    return true;
   };
 
   // Enter submits the challenge exactly like clicking Restore! - regardless
@@ -258,9 +283,14 @@ export default function VerseParchment({
                   if (hintTargeting) onBlankClick?.(segment.blankIndex);
                 }}
                 onKeyDown={(e) => {
-                  if (e.key !== ' ') return;
-                  e.preventDefault();
-                  focusNextEmptyTypedBlank(segment.blankIndex);
+                  if (e.key === ' ') {
+                    e.preventDefault();
+                    focusNextEmptyTypedBlank(segment.blankIndex);
+                    return;
+                  }
+                  if (e.key === 'Backspace' && e.currentTarget.selectionStart === 0 && e.currentTarget.selectionEnd === 0) {
+                    if (focusPreviousTypedBlank(segment.blankIndex)) e.preventDefault();
+                  }
                 }}
                 className={`border-0 border-b-2 rounded-none px-1 py-0.5 bg-transparent font-black not-italic text-xs w-24 text-center disabled:opacity-70 ${blankBorderClass} ${
                   hintTargeting && !value && !disabled ? 'hint-click-target' : ''

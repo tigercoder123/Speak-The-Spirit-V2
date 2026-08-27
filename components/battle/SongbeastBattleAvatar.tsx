@@ -110,7 +110,7 @@ const HANDCUFFS_ASKEW_ADD = { rotation: -60, x: -5, y: -80};
 // Leg_Front's own half-on offset - same role as HANDCUFFS_ASKEW_ADD above,
 // just for legcuffs' add layer. Starts from the same numbers as handcuffs;
 // tune against the actual leg art if the swing needs adjusting.
-const LEGCUFFS_ASKEW_ADD = { rotation: -60, x: -60, y: 65 };
+const LEGCUFFS_ASKEW_ADD = { rotation: -60, x: -10, y: 20 };
 
 // Where each item lands on the floor (relative to floorBehindRef's/floorFrontRef's
 // own inset-0 box, which is the same size/position as the head's box, just
@@ -150,7 +150,7 @@ const HOVER_POSE: Record<GearKey, { x: number; y: number; rotation: number; scal
   headphones: { x: -15, y: 15, rotation: 0, scale: 1.08 },
   glasses: { x: -5, y: 7, rotation: 0, scale: 1.06 },
   muzzle: { x: -25, y: 25, rotation: 0, scale: 1.05 },
-  handcuffs: { x: -20, y: -20, rotation: 0, scale: 1.06 },
+  handcuffs: { x: -20, y: -5, rotation: 0, scale: 1.06 },
   legcuffs: { x: -20, y: -10, rotation: 0, scale: 1.06 },
 };
 
@@ -210,9 +210,10 @@ const RESTORE_BAR_POSITION = {
 };
 
 // Anchored right at the forehead so its trailing dots read as coming from
-// it, nudged slightly to one side rather than dead-centered.
+// it, nudged slightly to one side rather than dead-centered. Nudged up an
+// extra 7px on top of that.
 const THOUGHT_BUBBLE_POSITION = {
-  bottom: FOREHEAD.bottom - 2 * BATTLE_SCENE_SCALE,
+  bottom: FOREHEAD.bottom - 2 * BATTLE_SCENE_SCALE + 7,
   right: FOREHEAD.right - 45 * BATTLE_SCENE_SCALE,
 };
 
@@ -1235,8 +1236,14 @@ export default function SongbeastBattleAvatar({
   });
 
   return (
+    // `isolate` traps this scene's internal z-index values (several of which
+    // go up to 999, see silencerWaveRef below) inside a local stacking
+    // context - without it, those values escape all the way to the page's
+    // root stacking context (since no ancestor between here and <body> sets
+    // a z-index of its own) and can out-rank unrelated fixed-position
+    // overlays elsewhere on the page, like SettingsModal's z-50 backdrop.
     <div
-      className="relative mx-auto flex w-full flex-col overflow-hidden rounded-xl bg-gradient-to-b from-green-950 to-slate-900 text-white"
+      className="relative isolate mx-auto flex w-full flex-col overflow-hidden rounded-xl bg-gradient-to-b from-green-950 to-slate-900 text-white"
       style={{ maxWidth: BATTLE_SCENE_MAX_WIDTH, aspectRatio: BATTLE_SCENE_ASPECT_RATIO }}
     >
       <div className="relative flex-1">
@@ -1246,10 +1253,18 @@ export default function SongbeastBattleAvatar({
           className="pointer-events-none absolute inset-0 h-full w-full object-cover"
         />
 
+        {/* Player's ground shadow. bottom is NOT the same 52 the player body
+            div below uses - Player_Girl_Body.png has ~65 (pre-scale) worth
+            of transparent padding below the character's actual feet
+            (measured directly against the PNG's non-transparent pixels), so
+            anchoring the shadow to the body div's own bottom edge floats it
+            deep in that empty padding, invisible. The extra +65 compensates
+            for that; +15 on top is the deliberate upward nudge, same as the
+            Songbeast's own shadow below. */}
         <div
           className="pointer-events-none absolute rounded-full"
           style={{
-            bottom: 52 * BATTLE_SCENE_SCALE,
+            bottom: (52 + 65) * BATTLE_SCENE_SCALE + 15,
             left: 78 * BATTLE_SCENE_SCALE,
             width: 116 * BATTLE_SCENE_SCALE,
             height: 16 * BATTLE_SCENE_SCALE,
@@ -1313,11 +1328,13 @@ export default function SongbeastBattleAvatar({
           }}
         />
 
+        {/* Songbeast's ground shadow - nudged up 15px from its natural
+            foot-aligned position (bottom matches songbeastGroupRef below). */}
         <div
           className="pointer-events-none absolute rounded-full"
           style={{
-            bottom: 120 * BATTLE_SCENE_SCALE,
-            left: 554 * BATTLE_SCENE_SCALE,
+            bottom: 120 * BATTLE_SCENE_SCALE + 5,
+            left: 554 * BATTLE_SCENE_SCALE - 20,
             width: 144 * BATTLE_SCENE_SCALE,
             height: 16 * BATTLE_SCENE_SCALE,
             background: 'radial-gradient(ellipse, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0.22) 55%, rgba(0,0,0,0) 75%)',
