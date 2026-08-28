@@ -15,7 +15,7 @@ export default function IntroDialogue() {
 
   const handleEnterOverworld = () => {
     addLog("Entered the Overworld Map. The quest for the Songbeasts begins!", "system");
-    setCurrentScreen('QUEST');
+    setCurrentScreen('OVERWORLD');
   };
 
   return (
